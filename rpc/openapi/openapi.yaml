@@ -54,6 +54,17 @@ info:
     However, the support for unsuffixed methods will be dropped in future releases and all users are
     encouraged to migrate as soon as possible.
 
+    ## Encoding
+
+    All data is encoded in amino-compatible JSON. This mostly differs from
+    `encoding/json` in encoding of integers (64-bit integers are encoded as
+    strings, not numbers), and handling of interfaces (wrapped in an interface
+    object with type/value keys).
+
+    Please refer to [this
+    documentation](https://pkg.go.dev/github.com/cometbft/cometbft/libs/json)
+    for additional details.
+
     ## URI/HTTP
 
     A REST like interface.
@@ -110,7 +121,7 @@ paths:
         Does not wait for DeliverTx result.
         If you want to be sure that the transaction is included in a block, you can
         subscribe for the result using JSONRPC via a websocket. See
-        https://docs.cometbft.com/main/core/subscription.html
+        https://docs.cometbft.com/main/explanation/core/subscription.html
         If you haven't received anything after a couple of blocks, resend it. If the
         same happens again, send it to some other node. A few reasons why it could
         happen:
@@ -121,7 +132,7 @@ paths:
         (https://github.com/tendermint/tendermint/issues/3322)
 
 
-        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/core/using-cometbft.html#formatting)
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/explanation/core/using-cometbft#formatting)
         for additional details
 
       parameters:
@@ -156,7 +167,7 @@ paths:
         Does not wait for CheckTx or DeliverTx results.
         If you want to be sure that the transaction is included in a block, you can
         subscribe for the result using JSONRPC via a websocket. See
-        https://docs.cometbft.com/main/core/subscription.html
+        https://docs.cometbft.com/main/explanation/core/subscription.html
         If you haven't received anything after a couple of blocks, resend it. If the
         same happens again, send it to some other node. A few reasons why it could
         happen:
@@ -167,7 +178,7 @@ paths:
         (https://github.com/tendermint/tendermint/issues/3322)
         3. node can be offline
 
-        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/core/using-cometbft.html#formatting)
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/explanation/core/using-cometbft.html#formatting)
         for additional details
 
       parameters:
@@ -209,7 +220,7 @@ paths:
         If CheckTx or DeliverTx fail, no error will be returned, but the returned result
         will contain a non-OK ABCI code.
 
-        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/core/using-cometbft.html#formatting)
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/explanation/core/using-cometbft.html#formatting)
         for additional details
 
       parameters:
@@ -242,7 +253,7 @@ paths:
       description: |
         The transaction won't be added to the mempool.
 
-        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/core/using-cometbft.html#formatting)
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/main/explanation/core/using-cometbft.html#formatting)
         for additional details
 
         Upon success, the `Cache-Control` header will be set with the default
@@ -436,7 +447,13 @@ paths:
       description: |
         Get block headers for minHeight <= height <= maxHeight.
 
-        At most 20 items will be returned.
+        If maxHeight does not yet exist, blocks up to the current height will
+        be returned. If minHeight does not exist (due to pruning), earliest
+        existing height will be used. If maxHeight < minHeight, an error will
+        be returned.
+
+        At most 20 items will be returned. Block headers are returned in
+        descending order (highest first).
 
         Upon success, the `Cache-Control` header will be set with the default
         maximum age.
@@ -995,7 +1012,7 @@ paths:
           required: true
           schema:
             type: string
-            example: '"block.height > 1000 AND valset.changed > 0"'
+            example: '"block.height > 1000"'
         - in: query
           name: page
           description: "Page number (1-based)"
@@ -2498,8 +2515,10 @@ components:
             response:
               required:
                 - "data"
-                - "app_version"
                 - "version"
+                - "app_version"
+                - "last_block_height"
+                - "last_block_app_hash"
               properties:
                 data:
                   type: string
@@ -2509,7 +2528,13 @@ components:
                   example: "0.16.1"
                 app_version:
                   type: string
+                  example: "1"
+                last_block_height:
+                  type: string
                   example: "1314126"
+                last_block_app_hash:
+                  type: string
+                  example: "C9AEBB441B787D9F1D846DE51F3826F4FD386108B59B08239653ABF59455C3F8"
               type: object
           type: object
 

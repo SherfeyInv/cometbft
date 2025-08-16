@@ -3,11 +3,11 @@ package mempool
 import (
 	"errors"
 
-	abcicli "github.com/cometbft/cometbft/abci/client"
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/libs/service"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/types"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/libs/service"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 // NopMempool is a mempool that does nothing.
@@ -63,6 +63,9 @@ func (*NopMempool) FlushAppConn() error { return nil }
 // Flush does nothing.
 func (*NopMempool) Flush() {}
 
+// Contains always returns false.
+func (*NopMempool) Contains(types.TxKey) bool { return false }
+
 // TxsAvailable always returns nil.
 func (*NopMempool) TxsAvailable() <-chan struct{} {
 	return nil
@@ -76,6 +79,9 @@ func (*NopMempool) Size() int { return 0 }
 
 // SizeBytes always returns 0.
 func (*NopMempool) SizeBytes() int64 { return 0 }
+
+// GetSenders always returns nil.
+func (*NopMempool) GetSenders(_ types.TxKey) ([]p2p.ID, error) { return nil, nil }
 
 // NopMempoolReactor is a mempool reactor that does nothing.
 type NopMempoolReactor struct {
@@ -94,8 +100,8 @@ var _ p2p.Reactor = &NopMempoolReactor{}
 // WaitSync always returns false.
 func (*NopMempoolReactor) WaitSync() bool { return false }
 
-// GetChannels always returns nil.
-func (*NopMempoolReactor) GetChannels() []*p2p.ChannelDescriptor { return nil }
+// StreamDescriptors always returns nil.
+func (*NopMempoolReactor) StreamDescriptors() []p2p.StreamDescriptor { return nil }
 
 // AddPeer does nothing.
 func (*NopMempoolReactor) AddPeer(p2p.Peer) {}
@@ -108,6 +114,11 @@ func (*NopMempoolReactor) RemovePeer(p2p.Peer, any) {}
 
 // Receive does nothing.
 func (*NopMempoolReactor) Receive(p2p.Envelope) {}
+
+// TryAddTx does nothing.
+func (*NopMempoolReactor) TryAddTx(_ types.Tx, _ p2p.Peer) (*abcicli.ReqRes, error) {
+	return nil, nil
+}
 
 // SetSwitch does nothing.
 func (*NopMempoolReactor) SetSwitch(*p2p.Switch) {}

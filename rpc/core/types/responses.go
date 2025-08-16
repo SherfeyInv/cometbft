@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"time"
 
-	abcitypes "github.com/cometbft/cometbft/abci/types"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/libs/bytes"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	abcitypes "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/libs/bytes"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 // List of blocks.
@@ -98,7 +98,7 @@ type ValidatorInfo struct {
 
 // Node Status.
 type ResultStatus struct {
-	NodeInfo      p2p.DefaultNodeInfo `json:"node_info"`
+	NodeInfo      p2p.NodeInfoDefault `json:"node_info"`
 	SyncInfo      SyncInfo            `json:"sync_info"`
 	ValidatorInfo ValidatorInfo       `json:"validator_info"`
 }
@@ -131,10 +131,10 @@ type ResultDialPeers struct {
 
 // A peer.
 type Peer struct {
-	NodeInfo         p2p.DefaultNodeInfo  `json:"node_info"`
-	IsOutbound       bool                 `json:"is_outbound"`
-	ConnectionStatus p2p.ConnectionStatus `json:"connection_status"`
-	RemoteIP         string               `json:"remote_ip"`
+	NodeInfo         p2p.NodeInfoDefault `json:"node_info"`
+	IsOutbound       bool                `json:"is_outbound"`
+	ConnectionStatus p2p.ConnState       `json:"connection_status"`
+	RemoteIP         string              `json:"remote_ip"`
 }
 
 // Validators for a height.

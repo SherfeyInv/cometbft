@@ -14,28 +14,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abcicli "github.com/cometbft/cometbft/abci/client"
-	"github.com/cometbft/cometbft/abci/example/kvstore"
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtcons "github.com/cometbft/cometbft/api/cometbft/consensus/v1"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/bits"
-	cstypes "github.com/cometbft/cometbft/internal/consensus/types"
-	"github.com/cometbft/cometbft/libs/bytes"
-	"github.com/cometbft/cometbft/libs/json"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	mempl "github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/p2p"
-	p2pmock "github.com/cometbft/cometbft/p2p/mock"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	statemocks "github.com/cometbft/cometbft/state/mocks"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
-	cmterrors "github.com/cometbft/cometbft/types/errors"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtcons "github.com/cometbft/cometbft/api/cometbft/consensus/v2"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	"github.com/cometbft/cometbft/v2/abci/example/kvstore"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/bits"
+	cstypes "github.com/cometbft/cometbft/v2/internal/consensus/types"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/v2/libs/bytes"
+	"github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	mempl "github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/p2p"
+	p2pmock "github.com/cometbft/cometbft/v2/p2p/mock"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	statemocks "github.com/cometbft/cometbft/v2/state/mocks"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
+	cmterrors "github.com/cometbft/cometbft/v2/types/errors"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 // ----------------------------------------------
@@ -162,8 +163,10 @@ func TestReactorWithEvidence(t *testing.T) {
 		proxyAppConnMem := proxy.NewAppConnMempool(abcicli.NewLocalClient(mtx, app), proxy.NopMetrics())
 
 		// Make Mempool
+		_, lanesInfo := fetchAppInfo(app)
 		mempool := mempl.NewCListMempool(config.Mempool,
 			proxyAppConnMem,
+			lanesInfo,
 			state.LastBlockHeight,
 			mempl.WithMetrics(memplMetrics),
 			mempl.WithPreCheck(sm.TxPreCheck(state)),
@@ -384,10 +387,13 @@ func TestSwitchToConsensusVoteExtensions(t *testing.T) {
 			var veHeight int64
 			if testCase.includeExtensions {
 				require.NotNil(t, signedVote.ExtensionSignature)
+				require.NotNil(t, signedVote.NonRpExtensionSignature)
 				veHeight = testCase.storedHeight
 			} else {
 				require.Nil(t, signedVote.Extension)
 				require.Nil(t, signedVote.ExtensionSignature)
+				require.Nil(t, signedVote.NonRpExtension)
+				require.Nil(t, signedVote.NonRpExtensionSignature)
 			}
 
 			added, err := voteSet.AddVote(signedVote)
@@ -445,6 +451,7 @@ func TestReactorRecordsVotesAndBlockParts(t *testing.T) {
 func TestReactorVotingPowerChange(t *testing.T) {
 	nVals := 4
 	logger := log.TestingLogger()
+
 	css, cleanup := randConsensusNet(
 		t,
 		nVals,
@@ -1112,4 +1119,41 @@ func TestMarshalJSONPeerState(t *testing.T) {
 			"votes":"0",
 			"block_parts":"0"}
 		}`, string(data))
+}
+
+func TestVoteMessageValidateBasic(t *testing.T) {
+	cs, vss := randState(2)
+	chainID := cs.state.ChainID
+
+	randBytes := cmtrand.Bytes(tmhash.Size)
+	blockID := types.BlockID{
+		Hash: randBytes,
+		PartSetHeader: types.PartSetHeader{
+			Total: 1,
+			Hash:  randBytes,
+		},
+	}
+	vote := signVote(vss[1], types.PrecommitType, chainID, blockID, true)
+
+	testCases := []struct {
+		malleateFn func(*VoteMessage)
+		expErr     string
+	}{
+		{func(_ *VoteMessage) {}, ""},
+		{func(msg *VoteMessage) { msg.Vote.ValidatorIndex = -1 }, "negative ValidatorIndex"},
+		// INVALID, but passes ValidateBasic, since the method does not know the number of active validators
+		{func(msg *VoteMessage) { msg.Vote.ValidatorIndex = 1000 }, ""},
+	}
+
+	for i, tc := range testCases {
+		t.Run(fmt.Sprintf("#%d", i), func(t *testing.T) {
+			msg := &VoteMessage{vote}
+
+			tc.malleateFn(msg)
+			err := msg.ValidateBasic()
+			if tc.expErr != "" && assert.Error(t, err) { //nolint:testifylint // require.Error doesn't work with the conditional here
+				assert.Contains(t, err.Error(), tc.expErr)
+			}
+		})
+	}
 }

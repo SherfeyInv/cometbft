@@ -10,6 +10,8 @@ import (
 )
 
 type LightStoreKeyLayout interface {
+	// Implementations of ParseLBKey should create a copy of the key parameter,
+	// rather than modify it in place.
 	ParseLBKey(key []byte, storePrefix string) (height int64, err error)
 	LBKey(height int64, prefix string) []byte
 	SizeKey(prefix string) []byte
@@ -19,7 +21,26 @@ type v1LegacyLayout struct{}
 
 // LBKey implements LightStoreKeyLayout.
 func (v1LegacyLayout) LBKey(height int64, prefix string) []byte {
-	return []byte(fmt.Sprintf("lb/%s/%020d", prefix, height))
+	const (
+		fixedPrefix    = "lb/"
+		fixedPrefixLen = len(fixedPrefix)
+	)
+	key := make([]byte, 0, fixedPrefixLen+len(prefix)+1+20)
+
+	key = append(key, fixedPrefix...)
+	key = append(key, prefix...)
+	key = append(key, '/')
+
+	var (
+		heightStr = strconv.FormatInt(height, 10)
+		padding   = 20 - len(heightStr)
+	)
+	for i := 0; i < padding; i++ {
+		key = append(key, '0')
+	}
+	key = append(key, heightStr...)
+
+	return key
 }
 
 // ParseLBKey implements LightStoreKeyLayout.

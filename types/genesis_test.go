@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	"github.com/cometbft/cometbft/v2/crypto/ed25519"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 func TestGenesisBad(t *testing.T) {
@@ -48,11 +48,28 @@ func TestGenesisBad(t *testing.T) {
 				`},"power":"10","name":""}` +
 				`]}`,
 		),
+		// unsupported validator pubkey type
+		[]byte(
+			`{
+				"chain_id": "test-chain-QDKdJr",
+				"validators": [{
+					"pub_key":{"type":"tendermint/PubKeyEd25519","value":"AT/+aaL1eB0477Mud9JMm8Sh8BIvOYlPGC9KkIUmFaE="},
+					"power":"10",
+					"name":""
+				}],
+				"consensus_params": {
+					"validator": {"pub_key_types":["secp256k1"]},
+					"block": {"max_bytes": "100"},
+					"evidence": {"max_age_num_blocks": "100", "max_age_duration": "10"}
+				}
+			}`,
+		),
 	}
 
-	for _, testCase := range testCases {
+	for i, testCase := range testCases {
 		_, err := GenesisDocFromJSON(testCase)
-		require.Error(t, err, "expected error for empty genDoc json")
+		formatStr := "test case %i: expected error for invalid genesis doc"
+		require.Error(t, err, formatStr, i)
 	}
 }
 

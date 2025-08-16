@@ -9,16 +9,16 @@ import (
 
 	"github.com/cosmos/gogoproto/proto"
 
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	cmtos "github.com/cometbft/cometbft/internal/os"
-	"github.com/cometbft/cometbft/internal/tempfile"
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	"github.com/cometbft/cometbft/libs/protoio"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/crypto/ed25519"
+	cmtos "github.com/cometbft/cometbft/v2/internal/os"
+	"github.com/cometbft/cometbft/v2/internal/tempfile"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/v2/libs/protoio"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 // TODO: type ?
@@ -156,6 +156,8 @@ func (lss *FilePVLastSignState) Save() {
 
 // -------------------------------------------------------------------------------
 
+var _ types.PrivValidator = (*FilePV)(nil)
+
 // FilePV implements PrivValidator using data persisted to disk
 // to prevent double signing.
 // NOTE: the directories containing pv.Key.filePath and pv.LastSignState.filePath must already exist.
@@ -182,9 +184,18 @@ func NewFilePV(privKey crypto.PrivKey, keyFilePath, stateFilePath string) *FileP
 	}
 }
 
-// GenFilePV calls NewFilePV with a random ed25519 private key.
-func GenFilePV(keyFilePath, stateFilePath string) *FilePV {
-	return NewFilePV(ed25519.GenPrivKey(), keyFilePath, stateFilePath)
+// GenFilePV calls NewFilePV with a random private key of one of the crypto libraries supported by CometBFT.
+func GenFilePV(keyFilePath, stateFilePath string, keyGen func() (crypto.PrivKey, error)) (*FilePV, error) {
+	if keyGen == nil {
+		keyGen = func() (crypto.PrivKey, error) {
+			return ed25519.GenPrivKey(), nil
+		}
+	}
+	key, err := keyGen()
+	if err != nil {
+		return nil, err
+	}
+	return NewFilePV(key, keyFilePath, stateFilePath), nil
 }
 
 // LoadFilePV loads a FilePV from the filePaths.  The FilePV handles double
@@ -240,15 +251,19 @@ func loadFilePV(keyFilePath, stateFilePath string, loadState bool) *FilePV {
 
 // LoadOrGenFilePV loads a FilePV from the given filePaths
 // or else generates a new one and saves it to the filePaths.
-func LoadOrGenFilePV(keyFilePath, stateFilePath string) *FilePV {
+func LoadOrGenFilePV(keyFilePath, stateFilePath string, keyGenF func() (crypto.PrivKey, error)) (*FilePV, error) {
 	var pv *FilePV
 	if cmtos.FileExists(keyFilePath) {
 		pv = LoadFilePV(keyFilePath, stateFilePath)
 	} else {
-		pv = GenFilePV(keyFilePath, stateFilePath)
+		var err error
+		pv, err = GenFilePV(keyFilePath, stateFilePath, keyGenF)
+		if err != nil {
+			return nil, err
+		}
 		pv.Save()
 	}
-	return pv
+	return pv, nil
 }
 
 // GetAddress returns the address of the validator.
@@ -334,18 +349,23 @@ func (pv *FilePV) signVote(chainID string, vote *cmtproto.Vote, signExtension bo
 		// re-sign the vote extensions of precommits. For prevotes and nil
 		// precommits, the extension signature will always be empty.
 		// Even if the signed over data is empty, we still add the signature
-		var extSig []byte
+		var extSig, nonRpExtSig []byte
 		if vote.Type == types.PrecommitType && !types.ProtoBlockIDIsNil(&vote.BlockID) {
-			extSignBytes := types.VoteExtensionSignBytes(chainID, vote)
+			extSignBytes, nonRpExtSignBytes := types.VoteExtensionSignBytes(chainID, vote)
 			extSig, err = pv.Key.PrivKey.Sign(extSignBytes)
 			if err != nil {
 				return err
 			}
-		} else if len(vote.Extension) > 0 {
+			nonRpExtSig, err = pv.Key.PrivKey.Sign(nonRpExtSignBytes)
+			if err != nil {
+				return err
+			}
+		} else if len(vote.Extension) > 0 || len(vote.NonRpExtension) > 0 {
 			return errors.New("unexpected vote extension - extensions are only allowed in non-nil precommits")
 		}
 
 		vote.ExtensionSignature = extSig
+		vote.NonRpExtensionSignature = nonRpExtSig
 	}
 
 	// We might crash before writing to the wal,

@@ -21,25 +21,21 @@ proxy_app = "{{ .BaseConfig.ProxyApp }}"
 # A custom human readable name for this node
 moniker = "{{ .BaseConfig.Moniker }}"
 
-# Database backend: goleveldb | rocksdb | badgerdb | pebbledb
+# Database backend: badgerdb | goleveldb | pebbledb | rocksdb
+# * badgerdb (uses github.com/dgraph-io/badger)
+#   - stable
+#   - pure go
+#   - use badgerdb build tag (go build -tags badgerdb)
 # * goleveldb (github.com/syndtr/goleveldb)
 #   - UNMAINTAINED
 #   - stable
 #   - pure go
+# * pebbledb (uses github.com/cockroachdb/pebble)
+#   - stable
+#   - pure go
 # * rocksdb (uses github.com/linxGnu/grocksdb)
-#   - EXPERIMENTAL
 #   - requires gcc
 #   - use rocksdb build tag (go build -tags rocksdb)
-# * badgerdb (uses github.com/dgraph-io/badger)
-#   - EXPERIMENTAL
-#   - stable
-#   - pure go
-#   - use badgerdb build tag (go build -tags badgerdb)
-# * pebbledb (uses github.com/cockroachdb/pebble)
-#   - EXPERIMENTAL
-#   - stable
-#   - pure go
-#   - use pebbledb build tag (go build -tags pebbledb)
 db_backend = "{{ .BaseConfig.DBBackend }}"
 
 # Database directory
@@ -48,8 +44,11 @@ db_dir = "{{ js .BaseConfig.DBPath }}"
 # Output level for logging, including package level options
 log_level = "{{ .BaseConfig.LogLevel }}"
 
-# Output format: 'plain' (colored text) or 'json'
+# Output format: 'plain' or 'json'
 log_format = "{{ .BaseConfig.LogFormat }}"
+
+# Colored log output when 'log_format' is 'plain'. Default is 'true'.
+log_colors = {{ .BaseConfig.LogColors }}
 
 ##### additional base config options #####
 
@@ -308,10 +307,6 @@ private_peer_ids = "{{ .P2P.PrivatePeerIDs }}"
 # Toggle to disable guard against peers connecting from the same ip.
 allow_duplicate_ip = {{ .P2P.AllowDuplicateIP }}
 
-# Peer connection configuration.
-handshake_timeout = "{{ .P2P.HandshakeTimeout }}"
-dial_timeout = "{{ .P2P.DialTimeout }}"
-
 #######################################################
 ###          Mempool Configuration Options          ###
 #######################################################
@@ -325,7 +320,7 @@ dial_timeout = "{{ .P2P.DialTimeout }}"
 #  - "nop"   : nop-mempool (short for no operation; the ABCI app is responsible
 #  for storing, disseminating and proposing txs). "create_empty_blocks=false" is
 #  not supported.
-type = "flood"
+type = "{{ .Mempool.Type }}"
 
 # recheck (default: true) defines whether CometBFT should recheck the
 # validity for all remaining transaction in the mempool after a block.
@@ -382,6 +377,26 @@ keep-invalid-txs-in-cache = {{ .Mempool.KeepInvalidTxsInCache }}
 experimental_max_gossip_connections_to_persistent_peers = {{ .Mempool.ExperimentalMaxGossipConnectionsToPersistentPeers }}
 experimental_max_gossip_connections_to_non_persistent_peers = {{ .Mempool.ExperimentalMaxGossipConnectionsToNonPersistentPeers }}
 
+# ExperimentalPublishEventPendingTx enables publishing a `PendingTx` event when a new transaction is added to the mempool.
+# Note: Enabling this feature may introduce potential delays in transaction processing due to blocking behavior.
+# Use this feature with caution and consider the impact on transaction processing performance.
+experimental_publish_event_pending_tx = {{ .Mempool.ExperimentalPublishEventPendingTx }}
+
+# When using the Flood mempool type, enable the DOG gossip protocol to
+# reduce network bandwidth on transaction dissemination (for details, see
+# specs/mempool/gossip/).
+dog_protocol_enabled = {{ .Mempool.DOGProtocolEnabled }}
+
+# Used by the DOG protocol to set the desired transaction redundancy level
+# for the node. For example, redundancy of 0.5 means that, for every two first-time
+# transactions received, the node will receive one duplicate transaction.
+dog_target_redundancy = {{ .Mempool.DOGTargetRedundancy }}
+
+# Used by the DOG protocol to set how often it will attempt to adjust the
+# redundancy level. The higher the value, the longer it will take the node
+# to reduce bandwidth and converge to a stable redundancy level.
+dog_adjust_interval = "{{ .Mempool.DOGAdjustInterval }}"
+
 #######################################################
 ###         State Sync Configuration Options        ###
 #######################################################
@@ -404,8 +419,9 @@ trust_height = {{ .StateSync.TrustHeight }}
 trust_hash = "{{ .StateSync.TrustHash }}"
 trust_period = "{{ .StateSync.TrustPeriod }}"
 
-# Time to spend discovering snapshots before initiating a restore.
-discovery_time = "{{ .StateSync.DiscoveryTime }}"
+# Time to spend discovering snapshots before switching to blocksync. If set to
+# 0, state sync will be trying indefinitely.
+max_discovery_time = "{{ .StateSync.MaxDiscoveryTime }}"
 
 # Temporary directory for state sync snapshot chunks, defaults to the OS tempdir (typically /tmp).
 # Will create a new, randomly named directory within, and remove it when done.
@@ -498,11 +514,6 @@ compact = {{ .Storage.Compact }}
 # it is too much of an overhead to try compaction every block. But it should also not be a very
 # large multiple of your retain height as it might occur bigger overheads.
 compaction_interval = "{{ .Storage.CompactionInterval }}"
-
-# Hash of the Genesis file (as hex string), passed to CometBFT via the command line.
-# If this hash mismatches the hash that CometBFT computes on the genesis file,
-# the node is not able to boot.
-genesis_hash = "{{ .Storage.GenesisHash }}"
 
 [storage.pruning]
 

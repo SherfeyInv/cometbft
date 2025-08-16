@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	cmterrors "github.com/cometbft/cometbft/types/errors"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	cmterrors "github.com/cometbft/cometbft/v2/types/errors"
 )
 
 // Evidence represents any provable misbehavior committed by a validator.
@@ -38,9 +38,9 @@ type DuplicateVoteEvidence struct {
 	VoteB *Vote `json:"vote_b"`
 
 	// abci specific information
-	TotalVotingPower int64
-	ValidatorPower   int64
-	Timestamp        time.Time
+	TotalVotingPower int64     `json:"total_voting_power"`
+	ValidatorPower   int64     `json:"validator_power"`
+	Timestamp        time.Time `json:"timestamp"`
 }
 
 var _ Evidence = &DuplicateVoteEvidence{}
@@ -208,13 +208,20 @@ func DuplicateVoteEvidenceFromProto(pb *cmtproto.DuplicateVoteEvidence) (*Duplic
 // and Amnesia. These attacks are exhaustive. You can find a more detailed overview of this at
 // cometbft/docs/architecture/tendermint-core/adr-047-handling-evidence-from-light-client.md.
 type LightClientAttackEvidence struct {
-	ConflictingBlock *LightBlock
-	CommonHeight     int64
+	ConflictingBlock *LightBlock `json:"conflicting_block"`
+	CommonHeight     int64       `json:"common_height"`
 
-	// abci specific information
-	ByzantineValidators []*Validator // validators in the validator set that misbehaved in creating the conflicting block
-	TotalVotingPower    int64        // total voting power of the validator set at the common height
-	Timestamp           time.Time    // timestamp of the block at the common height
+	// ABCI specific information
+
+	// validators in the validator set that misbehaved in creating the conflicting
+	// block
+	ByzantineValidators []*Validator `json:"byzantine_validators"`
+
+	// total voting power of the validator set at the common height
+	TotalVotingPower int64 `json:"total_voting_power"`
+
+	// timestamp of the block at the common height
+	Timestamp time.Time `json:"timestamp"`
 }
 
 var _ Evidence = &LightClientAttackEvidence{}

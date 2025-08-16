@@ -14,14 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	cmtversion "github.com/cometbft/cometbft/api/cometbft/version/v1"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/bits"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	"github.com/cometbft/cometbft/libs/bytes"
-	cmttime "github.com/cometbft/cometbft/types/time"
-	"github.com/cometbft/cometbft/version"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/bits"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/v2/libs/bytes"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
 func TestMain(m *testing.M) {
@@ -552,6 +552,7 @@ func TestVoteSetToExtendedCommit(t *testing.T) {
 				vote.Signature = v.Signature
 				if testCase.includeExtension {
 					vote.ExtensionSignature = v.ExtensionSignature
+					vote.NonRpExtensionSignature = v.NonRpExtensionSignature
 				}
 				added, err := voteSet.AddVote(vote)
 				require.NoError(t, err)
@@ -617,8 +618,12 @@ func TestExtendedCommitToVoteSet(t *testing.T) {
 					v := voteSet.GetByIndex(int32(i))
 					v.Extension = nil
 					v.ExtensionSignature = nil
+					v.NonRpExtension = nil
+					v.NonRpExtensionSignature = nil
 					extCommit.ExtendedSignatures[i].Extension = nil
 					extCommit.ExtendedSignatures[i].ExtensionSignature = nil
+					extCommit.ExtendedSignatures[i].NonRpExtension = nil
+					extCommit.ExtendedSignatures[i].NonRpExtensionSignature = nil
 				}
 			}
 

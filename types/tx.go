@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
 )
 
 // TxKeySize is the size of the transaction key index.
@@ -26,7 +26,7 @@ type (
 )
 
 // Hash computes the TMHASH hash of the wire encoded transaction.
-func (tx Tx) Hash() []byte {
+func (tx Tx) Hash() cmtbytes.HexBytes {
 	return tmhash.Sum(tx)
 }
 
@@ -37,6 +37,10 @@ func (tx Tx) Key() TxKey {
 // String returns the hex-encoded transaction as a string.
 func (tx Tx) String() string {
 	return fmt.Sprintf("Tx{%X}", []byte(tx))
+}
+
+func (txKey TxKey) Hash() []byte {
+	return txKey[:]
 }
 
 // Txs is a slice of Tx.
@@ -91,8 +95,13 @@ func (txs Txs) hashList() [][]byte {
 // Txs is a slice of transactions. Sorting a Txs value orders the transactions
 // lexicographically.
 
-func (txs Txs) Len() int      { return len(txs) }
+// Deprecated: Do not use.
+func (txs Txs) Len() int { return len(txs) }
+
+// Deprecated: Do not use.
 func (txs Txs) Swap(i, j int) { txs[i], txs[j] = txs[j], txs[i] }
+
+// Deprecated: Do not use.
 func (txs Txs) Less(i, j int) bool {
 	return bytes.Compare(txs[i], txs[j]) == -1
 }

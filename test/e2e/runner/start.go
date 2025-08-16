@@ -6,9 +6,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cometbft/cometbft/libs/log"
-	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
-	"github.com/cometbft/cometbft/test/e2e/pkg/infra"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
+	"github.com/cometbft/cometbft/v2/test/e2e/pkg/infra"
 )
 
 func Start(ctx context.Context, testnet *e2e.Testnet, p infra.Provider) error {
@@ -63,12 +63,6 @@ func Start(ctx context.Context, testnet *e2e.Testnet, p infra.Provider) error {
 		} else {
 			logger.Info("start", "msg", log.NewLazySprintf("Node %v up on http://%s:%v",
 				node.Name, node.ExternalIP, node.RPCProxyPort))
-		}
-		if node.ZoneIsSet() {
-			logger.Info("setting latency", "zone", node.Zone)
-			if err := p.SetLatency(ctx, node); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -131,12 +125,6 @@ func Start(ctx context.Context, testnet *e2e.Testnet, p infra.Provider) error {
 		} else {
 			logger.Info("start", "msg", log.NewLazySprintf("Node %v up on http://%s:%v at height %v",
 				node.Name, node.ExternalIP, node.RPCProxyPort, status.SyncInfo.LatestBlockHeight))
-		}
-		if node.ZoneIsSet() {
-			logger.Info("setting latency", "zone", node.Zone)
-			if err := p.SetLatency(ctx, node); err != nil {
-				return err
-			}
 		}
 	}
 

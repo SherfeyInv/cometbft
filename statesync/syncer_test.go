@@ -9,25 +9,28 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v1"
+	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v2"
 	ssproto "github.com/cometbft/cometbft/api/cometbft/statesync/v1"
 	cmtversion "github.com/cometbft/cometbft/api/cometbft/version/v1"
-	"github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	"github.com/cometbft/cometbft/p2p"
-	p2pmocks "github.com/cometbft/cometbft/p2p/mocks"
-	"github.com/cometbft/cometbft/proxy"
-	proxymocks "github.com/cometbft/cometbft/proxy/mocks"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/statesync/mocks"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
-	"github.com/cometbft/cometbft/version"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	"github.com/cometbft/cometbft/v2/p2p"
+	p2pmocks "github.com/cometbft/cometbft/v2/p2p/mocks"
+	"github.com/cometbft/cometbft/v2/proxy"
+	proxymocks "github.com/cometbft/cometbft/v2/proxy/mocks"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/statesync/mocks"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
-const testAppVersion = 9
+const (
+	testAppVersion   = 9
+	maxDiscoveryTime = 1 * time.Millisecond // Not 0 because 0 means no timeout.
+)
 
 // Sets up a basic syncer that can be used to test OfferSnapshot requests.
 func setupOfferSyncer() (*syncer, *proxymocks.AppConnSnapshot) {
@@ -44,7 +47,7 @@ func setupOfferSyncer() (*syncer, *proxymocks.AppConnSnapshot) {
 // Sets up a simple peer mock with an ID.
 func simplePeer(id string) *p2pmocks.Peer {
 	peer := &p2pmocks.Peer{}
-	peer.On("ID").Return(p2p.ID(id))
+	peer.On("ID").Return(id)
 	return peer
 }
 
@@ -98,7 +101,7 @@ func TestSyncer_SyncAny(t *testing.T) {
 
 	// Adding a couple of peers should trigger snapshot discovery messages
 	peerA := &p2pmocks.Peer{}
-	peerA.On("ID").Return(p2p.ID("a"))
+	peerA.On("ID").Return("a")
 	peerA.On("Send", mock.MatchedBy(func(i any) bool {
 		e, ok := i.(p2p.Envelope)
 		if !ok {
@@ -106,12 +109,12 @@ func TestSyncer_SyncAny(t *testing.T) {
 		}
 		req, ok := e.Message.(*ssproto.SnapshotsRequest)
 		return ok && e.ChannelID == SnapshotChannel && req != nil
-	})).Return(true)
+	})).Return(nil)
 	syncer.AddPeer(peerA)
 	peerA.AssertExpectations(t)
 
 	peerB := &p2pmocks.Peer{}
-	peerB.On("ID").Return(p2p.ID("b"))
+	peerB.On("ID").Return("b")
 	peerB.On("Send", mock.MatchedBy(func(i any) bool {
 		e, ok := i.(p2p.Envelope)
 		if !ok {
@@ -119,7 +122,7 @@ func TestSyncer_SyncAny(t *testing.T) {
 		}
 		req, ok := e.Message.(*ssproto.SnapshotsRequest)
 		return ok && e.ChannelID == SnapshotChannel && req != nil
-	})).Return(true)
+	})).Return(nil)
 	syncer.AddPeer(peerB)
 	peerB.AssertExpectations(t)
 
@@ -180,11 +183,11 @@ func TestSyncer_SyncAny(t *testing.T) {
 	peerA.On("Send", mock.MatchedBy(func(i any) bool {
 		e, ok := i.(p2p.Envelope)
 		return ok && e.ChannelID == ChunkChannel
-	})).Maybe().Run(onChunkRequest).Return(true)
+	})).Maybe().Run(onChunkRequest).Return(nil)
 	peerB.On("Send", mock.MatchedBy(func(i any) bool {
 		e, ok := i.(p2p.Envelope)
 		return ok && e.ChannelID == ChunkChannel
-	})).Maybe().Run(onChunkRequest).Return(true)
+	})).Maybe().Run(onChunkRequest).Return(nil)
 
 	// The first time we're applying chunk 2 we tell it to retry the snapshot and discard chunk 1,
 	// which should cause it to keep the existing chunk 0 and 2, and restart restoration from
@@ -212,7 +215,7 @@ func TestSyncer_SyncAny(t *testing.T) {
 		LastBlockAppHash: []byte("app_hash"),
 	}, nil)
 
-	newState, lastCommit, err := syncer.SyncAny(0, func() {})
+	newState, lastCommit, err := syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	require.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond) // wait for peers to receive requests
@@ -234,7 +237,7 @@ func TestSyncer_SyncAny(t *testing.T) {
 
 func TestSyncer_SyncAny_noSnapshots(t *testing.T) {
 	syncer, _ := setupOfferSyncer()
-	_, _, err := syncer.SyncAny(0, func() {})
+	_, _, err := syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	assert.Equal(t, errNoSnapshots, err)
 }
 
@@ -248,7 +251,7 @@ func TestSyncer_SyncAny_abort(t *testing.T) {
 		Snapshot: toABCI(s), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.OfferSnapshotResponse{Result: abci.OFFER_SNAPSHOT_RESULT_ABORT}, nil)
 
-	_, _, err = syncer.SyncAny(0, func() {})
+	_, _, err = syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	assert.Equal(t, errAbort, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -279,7 +282,7 @@ func TestSyncer_SyncAny_reject(t *testing.T) {
 		Snapshot: toABCI(s11), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.OfferSnapshotResponse{Result: abci.OFFER_SNAPSHOT_RESULT_REJECT}, nil)
 
-	_, _, err = syncer.SyncAny(0, func() {})
+	_, _, err = syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	assert.Equal(t, errNoSnapshots, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -306,7 +309,7 @@ func TestSyncer_SyncAny_reject_format(t *testing.T) {
 		Snapshot: toABCI(s11), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.OfferSnapshotResponse{Result: abci.OFFER_SNAPSHOT_RESULT_ABORT}, nil)
 
-	_, _, err = syncer.SyncAny(0, func() {})
+	_, _, err = syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	assert.Equal(t, errAbort, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -344,7 +347,7 @@ func TestSyncer_SyncAny_reject_sender(t *testing.T) {
 		Snapshot: toABCI(sa), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.OfferSnapshotResponse{Result: abci.OFFER_SNAPSHOT_RESULT_REJECT}, nil)
 
-	_, _, err = syncer.SyncAny(0, func() {})
+	_, _, err = syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	assert.Equal(t, errNoSnapshots, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -360,7 +363,7 @@ func TestSyncer_SyncAny_abciError(t *testing.T) {
 		Snapshot: toABCI(s), AppHash: []byte("app_hash"),
 	}).Once().Return(nil, errBoom)
 
-	_, _, err = syncer.SyncAny(0, func() {})
+	_, _, err = syncer.SyncAny(0, maxDiscoveryTime, func() {})
 	require.ErrorIs(t, err, errBoom)
 	connSnapshot.AssertExpectations(t)
 }
@@ -594,7 +597,7 @@ func TestSyncer_applyChunks_RejectSenders(t *testing.T) {
 				Index: 2, Chunk: []byte{2}, Sender: "c",
 			}).Once().Return(&abci.ApplySnapshotChunkResponse{
 				Result:        tc.result,
-				RejectSenders: []string{string(peerB.ID())},
+				RejectSenders: []string{peerB.ID()},
 			}, nil)
 
 			// On retry, the last chunk will be tried again, so we just accept it then.

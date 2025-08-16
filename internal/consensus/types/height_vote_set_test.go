@@ -6,12 +6,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	"github.com/cometbft/cometbft/internal/test"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 var config *cfg.Config // NOTE: must be reset for each _test.go file
@@ -61,6 +61,7 @@ func TestInconsistentExtensionData(t *testing.T) {
 	hvsE := NewExtendedHeightVoteSet(test.DefaultTestChainID, 1, valSet)
 	voteNoExt := makeVoteHR(20, privVals)
 	voteNoExt.Extension, voteNoExt.ExtensionSignature = nil, nil
+	voteNoExt.NonRpExtension, voteNoExt.NonRpExtensionSignature = nil, nil
 	require.Panics(t, func() {
 		_, _ = hvsE.AddVote(voteNoExt, "peer1", false)
 	})

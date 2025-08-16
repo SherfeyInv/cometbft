@@ -100,7 +100,7 @@ the timestamps of blocks proposed by their peers to be valid either.
 The functionality of the PBTS algorithm is governed by two consensus
 parameters: the synchronous parameters `Precision` and `MessageDelay`.
 An additional consensus parameter `PbtsEnableHeight` is used to enable PBTS
-when instantiating a new network or when upgrading an existing a network that
+when instantiating a new network or when upgrading an existing network that
 uses BFT Time.
 
 Consensus parameters are configured through the genesis file, for new chains, or by the ABCI application, for new and existing chains, and are the same
@@ -112,6 +112,8 @@ The `Precision` parameter configures the acceptable upper-bound of clock drift
 among all of the validators in the network.
 Any two validators are expected to have clocks that differ by at most
 `Precision` at any given instant.
+
+**Note:** The `Precision` value must not exceed 30 seconds. This is a hard-coded upper limit enforced in the implementation to avoid overflow errors when used in timestamp calculations.
 
 The `Precision` parameter is of [`time.Duration`](https://pkg.go.dev/time#Duration) type.
 
@@ -125,6 +127,9 @@ it is recommended to set `Precision` to at least `500ms`.
 The `MessageDelay` parameter configures the acceptable upper-bound for the
 end-to-end delay for transmitting a `Proposal` message from the proposer to
 _all_ validators in the network.
+
+**Note:** The `MessageDelay` value must not exceed `24 hours`. This cap is enforced in the implementation to avoid overflow errors in time-based computations, especially when combined with round-based  
+exponential delay adjustments.
 
 The `MessageDelay` parameter is of [`time.Duration`](https://pkg.go.dev/time#Duration) type.
 
@@ -180,7 +185,7 @@ When configuring a network to adopt the PBTS algorithm, the following steps must
      this distribution (e.g., the 99th or 99.9th percentiles).
 1. Make sure that the block times **currently** produced by the network do not
    differ too much from real time.
-   This is specially relevant when block times produced by BFT time are in the
+   This is especially relevant when block times produced by BFT time are in the
    future, with respect to real time.
 
 ### Adaptive MessageDelay

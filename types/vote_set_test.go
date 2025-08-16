@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/crypto"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	"github.com/cometbft/cometbft/v2/crypto"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 func TestVoteSet_AddVote_Good(t *testing.T) {
@@ -115,6 +115,56 @@ func TestVoteSet_AddVote_Bad(t *testing.T) {
 		added, err := signAddVote(privValidators[3], withType(vote, byte(PrecommitType)), voteSet)
 		if added || err == nil {
 			t.Errorf("expected VoteSet.Add to fail, wrong type")
+		}
+	}
+}
+
+func Benchmark_2_3_Maj(b *testing.B) {
+	height, round := int64(1), int32(0)
+
+	voteProto := &Vote{
+		ValidatorAddress: nil, // NOTE: must fill in
+		ValidatorIndex:   -1,  // NOTE: must fill in
+		Height:           height,
+		Round:            round,
+		Type:             PrevoteType,
+		Timestamp:        cmttime.Now(),
+		BlockID:          BlockID{nil, PartSetHeader{}},
+	}
+	blockPartsTotal := uint32(123)
+	blockPartSetHeader := PartSetHeader{blockPartsTotal, crypto.CRandBytes(32)}
+	for i := 0; i < b.N; i++ {
+		voteSet, _, privValidators := randVoteSet(height, round, PrevoteType, 100, 1, false)
+		for i := int32(0); i < int32(100); i += 4 {
+			pubKey, _ := privValidators[i].GetPubKey()
+			adrr := pubKey.Address()
+			vote := withValidator(voteProto, adrr, i)
+			_, err := signAddVote(privValidators[i], withBlockHash(vote, nil), voteSet)
+			require.NoError(b, err)
+			_, _ = voteSet.TwoThirdsMajority()
+
+			pubKey, _ = privValidators[i+1].GetPubKey()
+			adrr = pubKey.Address()
+			vote = withValidator(voteProto, adrr, i+1)
+			_, err = signAddVote(privValidators[i+1], vote, voteSet)
+			require.NoError(b, err)
+			_, _ = voteSet.TwoThirdsMajority()
+
+			pubKey, _ = privValidators[i+2].GetPubKey()
+			adrr = pubKey.Address()
+			vote = withValidator(voteProto, adrr, i+2)
+			blockPartsHeader := PartSetHeader{blockPartsTotal, crypto.CRandBytes(32)}
+			_, err = signAddVote(privValidators[i+2], withBlockPartSetHeader(vote, blockPartsHeader), voteSet)
+			require.NoError(b, err)
+			_, _ = voteSet.TwoThirdsMajority()
+
+			pubKey, _ = privValidators[i+3].GetPubKey()
+			adrr = pubKey.Address()
+			vote = withValidator(voteProto, adrr, i+3)
+			blockPartsHeader = PartSetHeader{blockPartsTotal + 1, blockPartSetHeader.Hash}
+			_, err = signAddVote(privValidators[i+3], withBlockPartSetHeader(vote, blockPartsHeader), voteSet)
+			require.NoError(b, err)
+			_, _ = voteSet.TwoThirdsMajority()
 		}
 	}
 }
@@ -540,6 +590,7 @@ func TestVoteSet_VoteExtensionsEnabled(t *testing.T) {
 
 			if tc.addExtension {
 				vote.ExtensionSignature = v.ExtensionSignature
+				vote.NonRpExtensionSignature = v.NonRpExtensionSignature
 			}
 
 			added, err := voteSet.AddVote(vote)

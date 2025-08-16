@@ -2,29 +2,29 @@ package evidence_test
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/fortytw2/leaktest"
-	"github.com/go-kit/log/term"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/evidence"
-	"github.com/cometbft/cometbft/internal/evidence/mocks"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/p2p"
-	p2pmocks "github.com/cometbft/cometbft/p2p/mocks"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/evidence"
+	"github.com/cometbft/cometbft/v2/internal/evidence/mocks"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/p2p"
+	p2pmocks "github.com/cometbft/cometbft/v2/p2p/mocks"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 var (
@@ -207,10 +207,11 @@ func TestReactorBroadcastEvidenceMemoryLeak(t *testing.T) {
 	// i.e. broadcastEvidenceRoutine finishes when peer is stopped
 	defer leaktest.CheckTimeout(t, 10*time.Second)()
 
+	p.On("HasChannel", evidence.EvidenceChannel).Maybe().Return(true)
 	p.On("Send", mock.MatchedBy(func(i any) bool {
 		e, ok := i.(p2p.Envelope)
 		return ok && e.ChannelID == evidence.EvidenceChannel
-	})).Return(false)
+	})).Return(errors.New("peer is stopped"))
 	quitChan := make(<-chan struct{})
 	p.On("Quit").Return(quitChan)
 	ps := peerState{2}
@@ -225,19 +226,6 @@ func TestReactorBroadcastEvidenceMemoryLeak(t *testing.T) {
 	_ = sendEvidence(t, pool, val, 2)
 }
 
-// evidenceLogger is a TestingLogger which uses a different
-// color for each validator ("validator" key must exist).
-func evidenceLogger() log.Logger {
-	return log.TestingLoggerWithColorFn(func(keyvals ...any) term.FgBgColor {
-		for i := 0; i < len(keyvals)-1; i += 2 {
-			if keyvals[i] == "validator" {
-				return term.FgBgColor{Fg: term.Color(uint8(keyvals[i+1].(int) + 1))}
-			}
-		}
-		return term.FgBgColor{}
-	})
-}
-
 // connect N evidence reactors through N switches.
 func makeAndConnectReactorsAndPools(config *cfg.Config, stateStores []sm.Store) ([]*evidence.Reactor,
 	[]*evidence.Pool,
@@ -246,7 +234,7 @@ func makeAndConnectReactorsAndPools(config *cfg.Config, stateStores []sm.Store) 
 
 	reactors := make([]*evidence.Reactor, n)
 	pools := make([]*evidence.Pool, n)
-	logger := evidenceLogger()
+	logger := log.TestingLogger()
 	evidenceTime := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	for i := 0; i < n; i++ {

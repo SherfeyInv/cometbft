@@ -14,23 +14,23 @@ import (
 
 	"github.com/cosmos/gogoproto/proto"
 
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto"
-	cstypes "github.com/cometbft/cometbft/internal/consensus/types"
-	cmtevents "github.com/cometbft/cometbft/internal/events"
-	"github.com/cometbft/cometbft/internal/fail"
-	cmtos "github.com/cometbft/cometbft/internal/os"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtmath "github.com/cometbft/cometbft/libs/math"
-	"github.com/cometbft/cometbft/libs/service"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	"github.com/cometbft/cometbft/p2p"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/types"
-	cmterrors "github.com/cometbft/cometbft/types/errors"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto"
+	cstypes "github.com/cometbft/cometbft/v2/internal/consensus/types"
+	cmtevents "github.com/cometbft/cometbft/v2/internal/events"
+	"github.com/cometbft/cometbft/v2/internal/fail"
+	cmtos "github.com/cometbft/cometbft/v2/internal/os"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtmath "github.com/cometbft/cometbft/v2/libs/math"
+	"github.com/cometbft/cometbft/v2/libs/service"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	"github.com/cometbft/cometbft/v2/p2p"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/types"
+	cmterrors "github.com/cometbft/cometbft/v2/types/errors"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 var msgQueueSize = 1000
@@ -248,11 +248,18 @@ func (cs *State) GetLastHeight() int64 {
 }
 
 // GetRoundState returns a shallow copy of the internal consensus state.
-func (cs *State) GetRoundState() *cstypes.RoundState {
+// This function is thread-safe.
+func (cs *State) GetRoundState() cstypes.RoundState {
 	cs.mtx.RLock()
-	rs := cs.RoundState // copy
+	rs := cs.getRoundState()
 	cs.mtx.RUnlock()
-	return &rs
+	return rs
+}
+
+// getRoundState returns a shallow copy of the internal consensus state.
+// This function is not thread-safe. Use GetRoundState for the thread-safe version.
+func (cs *State) getRoundState() cstypes.RoundState {
+	return cs.RoundState // copy
 }
 
 // GetRoundStateJSON returns a json of RoundState.
@@ -395,7 +402,8 @@ func (cs *State) OnStart() error {
 
 	// schedule the first round!
 	// use GetRoundState so we don't race the receiveRoutine for access
-	cs.scheduleRound0(cs.GetRoundState())
+	rs := cs.GetRoundState()
+	cs.scheduleRound0(&rs)
 
 	return nil
 }
@@ -772,7 +780,7 @@ func (cs *State) newStep() {
 			cs.Logger.Error("Failed publishing new round step", "err", err)
 		}
 
-		cs.evsw.FireEvent(types.EventNewRoundStep, &cs.RoundState)
+		cs.evsw.FireEvent(types.EventNewRoundStep, cs.RoundState)
 	}
 }
 
@@ -1127,7 +1135,7 @@ func (cs *State) needProofBlock(height int64) bool {
 
 	lastBlockMeta := cs.blockStore.LoadBlockMeta(height - 1)
 	if lastBlockMeta == nil {
-		// See https://github.com/cometbft/cometbft/issues/370
+		// See https://github.com/cometbft/cometbft/v2/issues/370
 		cs.Logger.Info("Short-circuited needProofBlock", "height", height, "InitialHeight", cs.state.InitialHeight)
 		return true
 	}
@@ -1428,7 +1436,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 			}
 
 			// Timestamp validation using Proposed-Based TimeStamp (PBTS) algorithm.
-			// See: https://github.com/cometbft/cometbft/blob/main/spec/consensus/proposer-based-timestamp/
+			// See: https://github.com/cometbft/cometbft/v2/blob/main/spec/consensus/proposer-based-timestamp/
 			if cs.isPBTSEnabled(height) {
 				if !cs.Proposal.Timestamp.Equal(cs.ProposalBlock.Header.Time) {
 					logger.Debug("Prevote step: proposal timestamp not equal; prevoting nil")
@@ -1547,7 +1555,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 		// If v_r = lockedRound_p we expect v to match lockedValue_p. If it is not the case,
 		// we have two 2/3+ majorities for different values at round v_r, meaning that the
 		// assumption of a 2/3+ majority of honest processes was violated. We should at
-		// least log this scenario, see: https://github.com/cometbft/cometbft/issues/1309.
+		// least log this scenario, see: https://github.com/cometbft/cometbft/v2/issues/1309.
 		if cs.LockedRound == cs.Proposal.POLRound {
 			logger.Info("Prevote step: ProposalBlock is valid and received a 2/3" +
 				"majority at our locked round, while not matching our locked value;" +
@@ -1776,7 +1784,7 @@ func (cs *State) enterCommit(height int64, commitRound int32) {
 		if !cs.ProposalBlockParts.HasHeader(blockID.PartSetHeader) {
 			logger.Info(
 				"Commit is for a block we do not know about; set ProposalBlock=nil",
-				"proposal", log.NewLazyBlockHash(cs.ProposalBlock),
+				"proposal", log.NewLazyHash(cs.ProposalBlock),
 				"commit", blockID.Hash,
 			)
 
@@ -1789,7 +1797,7 @@ func (cs *State) enterCommit(height int64, commitRound int32) {
 				logger.Error("Failed publishing valid block", "err", err)
 			}
 
-			cs.evsw.FireEvent(types.EventValidBlock, &cs.RoundState)
+			cs.evsw.FireEvent(types.EventValidBlock, cs.RoundState)
 		}
 	}
 }
@@ -1813,7 +1821,7 @@ func (cs *State) tryFinalizeCommit(height int64) {
 		// TODO: ^^ wait, why does it matter that we're a validator?
 		logger.Debug(
 			"Failed attempt to finalize commit; we do not have the commit block",
-			"proposal_block", log.NewLazyBlockHash(cs.ProposalBlock),
+			"proposal_block", log.NewLazyHash(cs.ProposalBlock),
 			"commit_block", blockID.Hash,
 		)
 		return
@@ -1855,7 +1863,7 @@ func (cs *State) finalizeCommit(height int64) {
 
 	logger.Info(
 		"Finalizing commit of block",
-		"hash", log.NewLazyBlockHash(block),
+		"hash", log.NewLazyHash(block),
 		"root", block.AppHash,
 		"num_txs", len(block.Txs),
 	)
@@ -2057,8 +2065,8 @@ func (cs *State) defaultSetProposal(proposal *types.Proposal, recvTime time.Time
 
 	p := proposal.ToProto()
 	// Verify signature
-	pubKey := cs.Validators.GetProposer().PubKey
-	if !pubKey.VerifySignature(
+	proposer := cs.Validators.GetProposer()
+	if !proposer.PubKey.VerifySignature(
 		types.ProposalSignBytes(cs.state.ChainID, p), proposal.Signature,
 	) {
 		return ErrInvalidProposalSignature
@@ -2082,9 +2090,15 @@ func (cs *State) defaultSetProposal(proposal *types.Proposal, recvTime time.Time
 	// TODO: We can check if Proposal is for a different block as this is a sign of misbehavior!
 	if cs.ProposalBlockParts == nil {
 		cs.ProposalBlockParts = types.NewPartSetFromHeader(proposal.BlockID.PartSetHeader)
+
+		// If we signed this Proposal, lock the PartSet until we load
+		// all the BlockParts that should come just after the Proposal.
+		if bytes.Equal(proposer.Address, cs.privValidatorPubKey.Address()) {
+			cs.ProposalBlockParts.Lock()
+		}
 	}
 
-	cs.Logger.Info("Received proposal", "proposal", proposal, "proposer", pubKey.Address())
+	cs.Logger.Info("Received proposal", "proposal", proposal, "proposer", proposer.Address)
 	return nil
 }
 
@@ -2185,9 +2199,13 @@ func (cs *State) addProposalBlockPart(msg *BlockPartMessage, peerID p2p.ID) (add
 		}
 
 		cs.ProposalBlock = block
+		cs.ProposalBlockParts.Unlock()
 
 		// NOTE: it's possible to receive complete proposal blocks for future rounds without having the proposal
-		cs.Logger.Info("Received complete proposal block", "height", cs.ProposalBlock.Height, "hash", cs.ProposalBlock.Hash())
+		cs.Logger.Info("Received complete proposal block",
+			"height", cs.ProposalBlock.Height,
+			"hash", cs.ProposalBlock.Hash(),
+			"num_txs", len(cs.ProposalBlock.Data.Txs))
 
 		if err := cs.eventBus.PublishEventCompleteProposal(cs.CompleteProposalEvent()); err != nil {
 			cs.Logger.Error("Failed publishing event complete proposal", "err", err)
@@ -2205,7 +2223,7 @@ func (cs *State) handleCompleteProposal(blockHeight int64) {
 			cs.Logger.Debug(
 				"Updating valid block to new proposal block",
 				"valid_round", cs.Round,
-				"valid_block_hash", log.NewLazyBlockHash(cs.ProposalBlock),
+				"valid_block_hash", log.NewLazyHash(cs.ProposalBlock),
 			)
 
 			cs.ValidRound = cs.Round
@@ -2239,7 +2257,7 @@ func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID) (bool, error) {
 		// If the vote height is off, we'll just ignore it,
 		// But if it's a conflicting sig, add it to the cs.evpool.
 		// If it's otherwise invalid, punish peer.
-		//nolint: gocritic
+
 		if voteErr, ok := err.(*types.ErrVoteConflictingVotes); ok {
 			if cs.privValidatorPubKey == nil {
 				return false, ErrPubKeyIsNotSet
@@ -2265,19 +2283,14 @@ func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID) (bool, error) {
 			)
 
 			return added, err
-		} else if errors.Is(err, types.ErrVoteNonDeterministicSignature) {
-			cs.Logger.Info("Vote has non-deterministic signature", "err", err)
-		} else if errors.Is(err, types.ErrInvalidVoteExtension) {
-			cs.Logger.Info("Vote has invalid extension")
-		} else {
-			// Either
-			// 1) bad peer OR
-			// 2) not a bad peer? this can also err sometimes with "Unexpected step" OR
-			// 3) tmkms use with multiple validators connecting to a single tmkms instance
-			// 		(https://github.com/tendermint/tendermint/issues/3839).
-			cs.Logger.Info("Failed attempting to add vote", "err", err)
-			return added, ErrAddingVote
 		}
+
+		// Either
+		// 1) bad peer OR
+		// 2) not a bad peer? this can also err sometimes with "Unexpected step" OR
+		// 3) tmkms use with multiple validators connecting to a single tmkms instance
+		// 		(https://github.com/tendermint/tendermint/issues/3839).
+		return added, ErrAddingVote{Err: err}
 	}
 
 	return added, nil
@@ -2292,6 +2305,8 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 		"cs_height", cs.Height,
 		"extLen", len(vote.Extension),
 		"extSigLen", len(vote.ExtensionSignature),
+		"nrpExtLen", len(vote.NonRpExtension),
+		"nrpExtSigLen", len(vote.NonRpExtensionSignature),
 	)
 
 	if vote.Height < cs.Height || (vote.Height == cs.Height && vote.Round < cs.Round) {
@@ -2361,6 +2376,14 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 			// Here, we verify the signature of the vote extension included in the vote
 			// message.
 			_, val := cs.state.Validators.GetByIndex(vote.ValidatorIndex)
+			if val == nil { // TODO: we should disconnect from this malicious peer
+				valsCount := cs.state.Validators.Size()
+				cs.Logger.Info("Peer sent us vote with invalid ValidatorIndex",
+					"peer", peerID,
+					"validator_index", vote.ValidatorIndex,
+					"len_validators", valsCount)
+				return added, ErrInvalidVote{Reason: fmt.Sprintf("ValidatorIndex %d is out of bounds [0, %d)", vote.ValidatorIndex, valsCount)}
+			}
 			if err := vote.VerifyExtension(cs.state.ChainID, val.PubKey); err != nil {
 				return false, err
 			}
@@ -2371,7 +2394,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 				return false, err
 			}
 		}
-	} else if len(vote.Extension) > 0 || len(vote.ExtensionSignature) > 0 {
+	} else if len(vote.Extension) > 0 || len(vote.ExtensionSignature) > 0 || len(vote.NonRpExtension) > 0 || len(vote.NonRpExtensionSignature) > 0 {
 		// Vote extensions are not enabled on the network.
 		// Reject the vote, as it is malformed
 		//
@@ -2423,7 +2446,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 				} else {
 					cs.Logger.Debug(
 						"Valid block we do not know about; set ProposalBlock=nil",
-						"proposal", log.NewLazyBlockHash(cs.ProposalBlock),
+						"proposal", log.NewLazyHash(cs.ProposalBlock),
 						"block_id", blockID.Hash,
 					)
 
@@ -2435,7 +2458,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 					cs.ProposalBlockParts = types.NewPartSetFromHeader(blockID.PartSetHeader)
 				}
 
-				cs.evsw.FireEvent(types.EventValidBlock, &cs.RoundState)
+				cs.evsw.FireEvent(types.EventValidBlock, cs.RoundState)
 				if err := cs.eventBus.PublishEventValidBlock(cs.RoundStateEvent()); err != nil {
 					return added, err
 				}
@@ -2535,11 +2558,12 @@ func (cs *State) signVote(
 		// if the signedMessage type is for a non-nil precommit, add
 		// VoteExtension
 		if extEnabled {
-			ext, err := cs.blockExec.ExtendVote(context.TODO(), vote, block, cs.state)
+			ext, nonRpExt, err := cs.blockExec.ExtendVote(context.TODO(), vote, block, cs.state)
 			if err != nil {
 				return nil, err
 			}
 			vote.Extension = ext
+			vote.NonRpExtension = nonRpExt
 		}
 	}
 
@@ -2561,10 +2585,10 @@ func (cs *State) voteTime(height int64) time.Time {
 	// Minimum time increment between blocks
 	const timeIota = time.Millisecond
 	// TODO: We should remove next line in case we don't vote for v in case cs.ProposalBlock == nil,
-	// even if cs.LockedBlock != nil. See https://github.com/cometbft/cometbft/tree/main/spec/.
+	// even if cs.LockedBlock != nil. See https://github.com/cometbft/cometbft/v2/tree/main/spec/.
 	if cs.LockedBlock != nil {
 		// See the BFT time spec
-		// https://github.com/cometbft/cometbft/blob/main/spec/consensus/bft-time.md
+		// https://github.com/cometbft/cometbft/v2/blob/main/spec/consensus/bft-time.md
 		minVoteTime = cs.LockedBlock.Time.Add(timeIota)
 	} else if cs.ProposalBlock != nil {
 		minVoteTime = cs.ProposalBlock.Time.Add(timeIota)
@@ -2736,7 +2760,6 @@ func repairWalFile(src, dst string) error {
 		}
 	}
 
-	//nolint:nilerr
 	return nil
 }
 

@@ -17,11 +17,11 @@ import (
 	"context"
 	"errors"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/libs/pubsub/query"
-	"github.com/cometbft/cometbft/state/txindex"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/libs/pubsub/query"
+	"github.com/cometbft/cometbft/v2/state/txindex"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 // TxIndexer returns a bridge from es to the CometBFT v0.34 transaction indexer.
@@ -69,6 +69,12 @@ func (BackportTxIndexer) Search(context.Context, *query.Query, txindex.Paginatio
 }
 
 func (BackportTxIndexer) SetLogger(log.Logger) {}
+
+// Close closes the indexer's underlying database. The caller is responsible for
+// calling Close when done with the indexer.
+func (b BackportTxIndexer) Close() error {
+	return b.psql.Stop()
+}
 
 // BlockIndexer returns a bridge that implements the CometBFT v0.34 block
 // indexer interface, using the Postgres event sink as a backing store.

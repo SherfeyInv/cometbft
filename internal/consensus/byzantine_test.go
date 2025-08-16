@@ -13,20 +13,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abcicli "github.com/cometbft/cometbft/abci/client"
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtcons "github.com/cometbft/cometbft/api/cometbft/consensus/v1"
-	"github.com/cometbft/cometbft/internal/evidence"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/libs/service"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	mempl "github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtcons "github.com/cometbft/cometbft/api/cometbft/consensus/v2"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/internal/evidence"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/libs/service"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	mempl "github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 // ----------------------------------------------
@@ -48,7 +48,7 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 	css := make([]*State, nValidators)
 
 	for i := 0; i < nValidators; i++ {
-		logger := consensusLogger().With("test", "byzantine", "validator", i)
+		logger := consensusLogger().With("validator", i)
 		stateDB := dbm.NewMemDB() // each state needs its own db
 		stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 			DiscardABCIResponses: false,
@@ -71,8 +71,10 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 		proxyAppConnMem := proxy.NewAppConnMempool(abcicli.NewLocalClient(mtx, app), proxy.NopMetrics())
 
 		// Make Mempool
+		_, lanesInfo := fetchAppInfo(app)
 		mempool := mempl.NewCListMempool(config.Mempool,
 			proxyAppConnMem,
+			lanesInfo,
 			state.LastBlockHeight,
 			mempl.WithPreCheck(sm.TxPreCheck(state)),
 			mempl.WithPostCheck(sm.TxPostCheck(state)))
@@ -153,16 +155,18 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 			for i, peer := range peerList {
 				if i < len(peerList)/2 {
 					bcs.Logger.Info("Signed and pushed vote", "vote", prevote1, "peer", peer)
-					peer.Send(p2p.Envelope{
+					err = peer.Send(p2p.Envelope{
 						Message:   &cmtcons.Vote{Vote: prevote1.ToProto()},
 						ChannelID: VoteChannel,
 					})
+					require.NoError(t, err)
 				} else {
 					bcs.Logger.Info("Signed and pushed vote", "vote", prevote2, "peer", peer)
-					peer.Send(p2p.Envelope{
+					err = peer.Send(p2p.Envelope{
 						Message:   &cmtcons.Vote{Vote: prevote2.ToProto()},
 						ChannelID: VoteChannel,
 					})
+					require.NoError(t, err)
 				}
 			}
 		} else {
@@ -511,10 +515,13 @@ func sendProposalAndParts(
 	parts *types.PartSet,
 ) {
 	// proposal
-	peer.Send(p2p.Envelope{
+	err := peer.Send(p2p.Envelope{
 		ChannelID: DataChannel,
 		Message:   &cmtcons.Proposal{Proposal: *proposal.ToProto()},
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	// parts
 	for i := 0; i < int(parts.Total()); i++ {
@@ -523,7 +530,7 @@ func sendProposalAndParts(
 		if err != nil {
 			panic(err) // TODO: wbanfield better error handling
 		}
-		peer.Send(p2p.Envelope{
+		err = peer.Send(p2p.Envelope{
 			ChannelID: DataChannel,
 			Message: &cmtcons.BlockPart{
 				Height: height, // This tells peer that this part applies to us.
@@ -531,6 +538,9 @@ func sendProposalAndParts(
 				Part:   *pp,
 			},
 		})
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// votes
@@ -538,14 +548,20 @@ func sendProposalAndParts(
 	prevote, _ := cs.signVote(types.PrevoteType, blockHash, parts.Header(), nil)
 	precommit, _ := cs.signVote(types.PrecommitType, blockHash, parts.Header(), block)
 	cs.mtx.Unlock()
-	peer.Send(p2p.Envelope{
+	err = peer.Send(p2p.Envelope{
 		ChannelID: VoteChannel,
 		Message:   &cmtcons.Vote{Vote: prevote.ToProto()},
 	})
-	peer.Send(p2p.Envelope{
+	if err != nil {
+		panic(err)
+	}
+	err = peer.Send(p2p.Envelope{
 		ChannelID: VoteChannel,
 		Message:   &cmtcons.Vote{Vote: precommit.ToProto()},
 	})
+	if err != nil {
+		panic(err)
+	}
 }
 
 // ----------------------------------------
@@ -563,8 +579,11 @@ func NewByzantineReactor(conR *Reactor) *ByzantineReactor {
 	}
 }
 
-func (br *ByzantineReactor) SetSwitch(s *p2p.Switch)               { br.reactor.SetSwitch(s) }
-func (br *ByzantineReactor) GetChannels() []*p2p.ChannelDescriptor { return br.reactor.GetChannels() }
+func (br *ByzantineReactor) SetSwitch(s *p2p.Switch) { br.reactor.SetSwitch(s) }
+func (br *ByzantineReactor) StreamDescriptors() []p2p.StreamDescriptor {
+	return br.reactor.StreamDescriptors()
+}
+
 func (br *ByzantineReactor) AddPeer(peer p2p.Peer) {
 	if !br.reactor.IsRunning() {
 		return

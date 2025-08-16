@@ -13,32 +13,31 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-kit/log/term"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abcicli "github.com/cometbft/cometbft/abci/client"
-	"github.com/cometbft/cometbft/abci/example/kvstore"
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto"
-	cstypes "github.com/cometbft/cometbft/internal/consensus/types"
-	cmtos "github.com/cometbft/cometbft/internal/os"
-	"github.com/cometbft/cometbft/internal/test"
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	mempl "github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/privval"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	"github.com/cometbft/cometbft/v2/abci/example/kvstore"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto"
+	cstypes "github.com/cometbft/cometbft/v2/internal/consensus/types"
+	cmtos "github.com/cometbft/cometbft/v2/internal/os"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtpubsub "github.com/cometbft/cometbft/v2/libs/pubsub"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	mempl "github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/privval"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 const (
@@ -103,6 +102,7 @@ func (vs *validatorStub) signVote(
 	chainID string,
 	blockID types.BlockID,
 	voteExtension []byte,
+	nonRpVoteExtension []byte,
 	extEnabled bool,
 	timestamp time.Time,
 ) (*types.Vote, error) {
@@ -119,6 +119,7 @@ func (vs *validatorStub) signVote(
 		ValidatorAddress: pubKey.Address(),
 		ValidatorIndex:   vs.Index,
 		Extension:        voteExtension,
+		NonRpExtension:   nonRpVoteExtension,
 	}
 	v := vote.ToProto()
 	if err = vs.PrivValidator.SignVote(chainID, v, true); err != nil {
@@ -130,14 +131,17 @@ func (vs *validatorStub) signVote(
 		v.Signature = vs.lastVote.Signature
 		v.Timestamp = vs.lastVote.Timestamp
 		v.ExtensionSignature = vs.lastVote.ExtensionSignature
+		v.NonRpExtensionSignature = vs.lastVote.NonRpExtensionSignature
 	}
 
 	vote.Signature = v.Signature
 	vote.Timestamp = v.Timestamp
 	vote.ExtensionSignature = v.ExtensionSignature
+	vote.NonRpExtensionSignature = v.NonRpExtensionSignature
 
 	if !extEnabled {
 		vote.ExtensionSignature = nil
+		vote.NonRpExtensionSignature = nil
 	}
 
 	return vote, err
@@ -147,7 +151,7 @@ func (vs *validatorStub) signVote(
 func signVoteWithTimestamp(vs *validatorStub, voteType types.SignedMsgType, chainID string,
 	blockID types.BlockID, extEnabled bool, timestamp time.Time,
 ) *types.Vote {
-	var ext []byte
+	var ext, nonRpExt []byte
 	// Only non-nil precommits are allowed to carry vote extensions.
 	if extEnabled {
 		if voteType != types.PrecommitType {
@@ -155,9 +159,10 @@ func signVoteWithTimestamp(vs *validatorStub, voteType types.SignedMsgType, chai
 		}
 		if len(blockID.Hash) != 0 || !blockID.PartSetHeader.IsZero() {
 			ext = []byte("extension")
+			nonRpExt = []byte("non_replay_protected_extension")
 		}
 	}
-	v, err := vs.signVote(voteType, chainID, blockID, ext, extEnabled, timestamp)
+	v, err := vs.signVote(voteType, chainID, blockID, ext, nonRpExt, extEnabled, timestamp)
 	if err != nil {
 		panic(fmt.Errorf("failed to sign vote: %v", err))
 	}
@@ -430,11 +435,21 @@ func subscribeToVoterBuffered(cs *State, addr []byte) <-chan cmtpubsub.Message {
 }
 
 // -------------------------------------------------------------------------------
+// application
+
+func fetchAppInfo(app abci.Application) (*abci.InfoResponse, *mempl.LanesInfo) {
+	resp, _ := app.Info(context.Background(), proxy.InfoRequest)
+	lanesInfo, _ := mempl.BuildLanesInfo(resp.LanePriorities, resp.DefaultLane)
+	return resp, lanesInfo
+}
+
+// -------------------------------------------------------------------------------
 // consensus states
 
 func newState(state sm.State, pv types.PrivValidator, app abci.Application) *State {
 	config := test.ResetTestRoot("consensus_state_test")
-	return newStateWithConfig(config, state, pv, app)
+	_, lanesInfo := fetchAppInfo(app)
+	return newStateWithConfig(config, state, pv, app, lanesInfo)
 }
 
 func newStateWithConfig(
@@ -442,9 +457,10 @@ func newStateWithConfig(
 	state sm.State,
 	pv types.PrivValidator,
 	app abci.Application,
+	laneInfo *mempl.LanesInfo,
 ) *State {
 	blockDB := dbm.NewMemDB()
-	return newStateWithConfigAndBlockStore(thisConfig, state, pv, app, blockDB)
+	return newStateWithConfigAndBlockStore(thisConfig, state, pv, app, blockDB, laneInfo)
 }
 
 func newStateWithConfigAndBlockStore(
@@ -453,6 +469,7 @@ func newStateWithConfigAndBlockStore(
 	pv types.PrivValidator,
 	app abci.Application,
 	blockDB dbm.DB,
+	laneInfo *mempl.LanesInfo,
 ) *State {
 	// Get BlockStore
 	blockStore := store.NewBlockStore(blockDB)
@@ -468,6 +485,7 @@ func newStateWithConfigAndBlockStore(
 	// Make Mempool
 	mempool := mempl.NewCListMempool(config.Mempool,
 		proxyAppConnMem,
+		laneInfo,
 		state.LastBlockHeight,
 		mempl.WithMetrics(memplMetrics),
 		mempl.WithPreCheck(sm.TxPreCheck(state)),
@@ -491,7 +509,7 @@ func newStateWithConfigAndBlockStore(
 
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyAppConnCon, mempool, evpool, blockStore)
 	cs := NewState(thisConfig.Consensus, state, blockExec, blockStore, mempool, evpool)
-	cs.SetLogger(log.TestingLogger().With("module", "consensus"))
+	cs.SetLogger(consensusLogger())
 	cs.SetPrivValidator(pv)
 
 	eventBus := types.NewEventBus()
@@ -504,13 +522,16 @@ func newStateWithConfigAndBlockStore(
 	return cs
 }
 
-func loadPrivValidator(config *cfg.Config) *privval.FilePV {
+func loadPrivValidator(config *cfg.Config) (*privval.FilePV, error) {
 	privValidatorKeyFile := config.PrivValidatorKeyFile()
 	ensureDir(filepath.Dir(privValidatorKeyFile))
 	privValidatorStateFile := config.PrivValidatorStateFile()
-	privValidator := privval.LoadOrGenFilePV(privValidatorKeyFile, privValidatorStateFile)
+	privValidator, err := privval.LoadOrGenFilePV(privValidatorKeyFile, privValidatorStateFile, nil)
+	if err != nil {
+		return nil, err
+	}
 	privValidator.Reset()
-	return privValidator
+	return privValidator, nil
 }
 
 func randState(nValidators int) (*State, []*validatorStub) {
@@ -800,17 +821,8 @@ func ensureNewEventOnChannel(ch <-chan cmtpubsub.Message) {
 // -------------------------------------------------------------------------------
 // consensus nets
 
-// consensusLogger is a TestingLogger which uses a different
-// color for each validator ("validator" key must exist).
 func consensusLogger() log.Logger {
-	return log.TestingLoggerWithColorFn(func(keyvals ...any) term.FgBgColor {
-		for i := 0; i < len(keyvals)-1; i += 2 {
-			if keyvals[i] == "validator" {
-				return term.FgBgColor{Fg: term.Color(uint8(keyvals[i+1].(int) + 1))}
-			}
-		}
-		return term.FgBgColor{}
-	}).With("module", "consensus")
+	return log.TestingLogger().With("module", "consensus")
 }
 
 func randConsensusNet(t *testing.T, nValidators int, testName string, tickerFunc func() TimeoutTicker,
@@ -834,13 +846,14 @@ func randConsensusNet(t *testing.T, nValidators int, testName string, tickerFunc
 		}
 		ensureDir(filepath.Dir(thisConfig.Consensus.WalFile())) // dir for wal
 		app := appFunc()
+		_, lanesInfo := fetchAppInfo(app)
 		vals := types.TM2PB.ValidatorUpdates(state.Validators)
 		_, err := app.InitChain(context.Background(), &abci.InitChainRequest{Validators: vals})
 		require.NoError(t, err)
 
-		css[i] = newStateWithConfigAndBlockStore(thisConfig, state, privVals[i], app, stateDB)
+		css[i] = newStateWithConfigAndBlockStore(thisConfig, state, privVals[i], app, stateDB, lanesInfo)
 		css[i].SetTimeoutTicker(tickerFunc())
-		css[i].SetLogger(logger.With("validator", i, "module", "consensus"))
+		css[i].SetLogger(logger.With("validator", i))
 	}
 	return css, func() {
 		for _, dir := range configRootDirs {
@@ -871,7 +884,8 @@ func randConsensusNetWithPeers(
 			DiscardABCIResponses: false,
 		})
 		t.Cleanup(func() { _ = stateStore.Close() })
-		state, _ := stateStore.LoadFromDBOrGenesisDoc(genDoc)
+		state, err := stateStore.LoadFromDBOrGenesisDoc(genDoc)
+		require.NoError(t, err)
 		thisConfig := ResetConfig(fmt.Sprintf("%s_%d", testName, i))
 		configRootDirs = append(configRootDirs, thisConfig.RootDir)
 		ensureDir(filepath.Dir(thisConfig.Consensus.WalFile())) // dir for wal
@@ -882,30 +896,22 @@ func randConsensusNetWithPeers(
 		if i < nValidators {
 			privVal = privVals[i]
 		} else {
-			tempKeyFile, err := os.CreateTemp("", "priv_validator_key_")
-			if err != nil {
-				panic(err)
-			}
-			tempStateFile, err := os.CreateTemp("", "priv_validator_state_")
-			if err != nil {
-				panic(err)
-			}
-
-			privVal = privval.GenFilePV(tempKeyFile.Name(), tempStateFile.Name())
+			privVal = types.NewMockPV()
 		}
 
 		app := appFunc(path.Join(config.DBDir(), fmt.Sprintf("%s_%d", testName, i)))
+		_, lanesInfo := fetchAppInfo(app)
 		vals := types.TM2PB.ValidatorUpdates(state.Validators)
 		if _, ok := app.(*kvstore.Application); ok {
 			// simulate handshake, receive app version. If don't do this, replay test will fail
 			state.Version.Consensus.App = kvstore.AppVersion
 		}
-		_, err := app.InitChain(context.Background(), &abci.InitChainRequest{Validators: vals})
+		_, err = app.InitChain(context.Background(), &abci.InitChainRequest{Validators: vals})
 		require.NoError(t, err)
 
-		css[i] = newStateWithConfig(thisConfig, state, privVal, app)
+		css[i] = newStateWithConfig(thisConfig, state, privVal, app, lanesInfo)
 		css[i].SetTimeoutTicker(tickerFunc())
-		css[i].SetLogger(logger.With("validator", i, "module", "consensus"))
+		css[i].SetLogger(logger.With("validator", i))
 	}
 	return css, genDoc, peer0Config, func() {
 		for _, dir := range configRootDirs {
@@ -1053,7 +1059,8 @@ func signDataIsEqual(v1 *types.Vote, v2 *cmtproto.Vote) bool {
 		v1.Round == v2.Round &&
 		bytes.Equal(v1.ValidatorAddress.Bytes(), v2.GetValidatorAddress()) &&
 		v1.ValidatorIndex == v2.GetValidatorIndex() &&
-		bytes.Equal(v1.Extension, v2.Extension)
+		bytes.Equal(v1.Extension, v2.Extension) &&
+		bytes.Equal(v1.NonRpExtension, v2.NonRpExtension)
 }
 
 func updateValTx(pubKey crypto.PubKey, power int64) []byte {

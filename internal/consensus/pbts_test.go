@@ -10,14 +10,14 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/abci/example/kvstore"
-	abci "github.com/cometbft/cometbft/abci/types"
-	abcimocks "github.com/cometbft/cometbft/abci/types/mocks"
-	"github.com/cometbft/cometbft/internal/test"
-	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
-	cmttimemocks "github.com/cometbft/cometbft/types/time/mocks"
+	"github.com/cometbft/cometbft/v2/abci/example/kvstore"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	abcimocks "github.com/cometbft/cometbft/v2/abci/types/mocks"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	cmtpubsub "github.com/cometbft/cometbft/v2/libs/pubsub"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
+	cmttimemocks "github.com/cometbft/cometbft/v2/types/time/mocks"
 )
 
 const (
@@ -112,7 +112,7 @@ func newPBTSTestHarness(ctx context.Context, t *testing.T, tc pbtsTestConfigurat
 	consensusParams.Feature.PbtsEnableHeight = 1
 
 	state, privVals := randGenesisStateWithTime(validators, consensusParams, tc.genesisTime)
-	cs := newStateWithConfig(cfg, state, privVals[0], kvstore.NewInMemoryApplication())
+	cs := newStateWithConfig(cfg, state, privVals[0], kvstore.NewInMemoryApplication(), nil)
 	vss := make([]*validatorStub, validators)
 	for i := 0; i < validators; i++ {
 		vss[i] = newValidatorStub(privVals[i], int32(i))
@@ -529,6 +529,31 @@ func TestPBTSTooFarInTheFutureProposal(t *testing.T) {
 	require.Nil(t, results.height2.prevote.BlockID.Hash)
 }
 
+func TestPBTSTooFarInTheFutureProposalOverflow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// On purpose use a MessageDelay that has an overflow, i.e. infinite
+	// Emulates the logic for adaptive MessageDelay over rounds.
+	synchronyParams := types.DefaultSynchronyParams().InRound(256)
+	synchronyParams.Precision = 1 * time.Millisecond
+
+	// localtime < proposedBlockTime - Precision
+	cfg := pbtsTestConfiguration{
+		synchronyParams:                   synchronyParams,
+		timeoutPropose:                    50 * time.Millisecond,
+		height2ProposedBlockOffset:        100 * time.Millisecond,
+		height2ProposalTimeDeliveryOffset: 10 * time.Millisecond,
+		height4ProposedBlockOffset:        150 * time.Millisecond,
+	}
+
+	pbtsTest := newPBTSTestHarness(ctx, t, cfg)
+	results := pbtsTest.run(ctx, t)
+
+	// The proposal
+	require.Nil(t, results.height2.prevote.BlockID.Hash)
+}
+
 // TestPBTSEnableHeight tests the transition between BFT Time and PBTS.
 // The test runs multiple heights. BFT Time is used until the configured
 // PbtsEnableHeight. During some of these heights, the timestamp of votes
@@ -556,6 +581,7 @@ func TestPBTSEnableHeight(t *testing.T) {
 		Status: abci.VERIFY_VOTE_EXTENSION_STATUS_ACCEPT,
 	}, nil)
 	app.On("Commit", mock.Anything, mock.Anything).Return(&abci.CommitResponse{}, nil).Maybe()
+	app.On("Info", mock.Anything, mock.Anything).Return(&abci.InfoResponse{}, nil).Maybe()
 
 	cs, vss := randStateWithAppImpl(numValidators, app, c)
 	height, round, chainID := cs.Height, cs.Round, cs.state.ChainID

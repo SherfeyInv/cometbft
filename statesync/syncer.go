@@ -7,25 +7,21 @@ import (
 	"fmt"
 	"time"
 
-	abci "github.com/cometbft/cometbft/abci/types"
 	ssproto "github.com/cometbft/cometbft/api/cometbft/statesync/v1"
-	"github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	"github.com/cometbft/cometbft/light"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	"github.com/cometbft/cometbft/v2/light"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 const (
 	// chunkTimeout is the timeout while waiting for the next chunk from the chunk queue.
 	chunkTimeout = 2 * time.Minute
-
-	// minimumDiscoveryTime is the lowest allowable time for a
-	// SyncAny discovery time.
-	minimumDiscoveryTime = 5 * time.Second
 )
 
 var (
@@ -129,7 +125,7 @@ func (s *syncer) AddPeer(peer p2p.Peer) {
 		ChannelID: SnapshotChannel,
 		Message:   &ssproto.SnapshotsRequest{},
 	}
-	peer.Send(e)
+	_ = peer.Send(e)
 }
 
 // RemovePeer removes a peer from the pool.
@@ -138,18 +134,18 @@ func (s *syncer) RemovePeer(peer p2p.Peer) {
 	s.snapshots.RemovePeer(peer.ID())
 }
 
-// SyncAny tries to sync any of the snapshots in the snapshot pool, waiting to discover further
-// snapshots if none were found and discoveryTime > 0. It returns the latest state and block commit
-// which the caller must use to bootstrap the node.
-func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.State, *types.Commit, error) {
-	if discoveryTime != 0 && discoveryTime < minimumDiscoveryTime {
-		discoveryTime = 5 * minimumDiscoveryTime
-	}
+// SyncAny tries to sync any of the snapshots in the snapshot pool, waiting to
+// discover further snapshots if none were found within discoveryTime. It
+// returns the latest state and block commit which the caller must use to
+// bootstrap the node.
+//
+// If none snapshots are found after maxDiscoveryTime, errNoSnapshots is
+// returned.
+func (s *syncer) SyncAny(discoveryTime, maxDiscoveryTime time.Duration, retryHook func()) (sm.State, *types.Commit, error) {
+	timeStart := time.Now()
 
-	if discoveryTime > 0 {
-		s.logger.Info("Discovering snapshots", "discoverTime", discoveryTime)
-		time.Sleep(discoveryTime)
-	}
+	s.logger.Info(fmt.Sprintf("Discovering snapshots for %v", discoveryTime))
+	time.Sleep(discoveryTime)
 
 	// The app may ask us to retry a snapshot restoration, in which case we need to reuse
 	// the snapshot and chunk queue from the previous loop iteration.
@@ -165,11 +161,11 @@ func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.Stat
 			chunks = nil
 		}
 		if snapshot == nil {
-			if discoveryTime == 0 {
+			if maxDiscoveryTime > 0 && time.Since(timeStart) >= maxDiscoveryTime {
 				return sm.State{}, nil, errNoSnapshots
 			}
 			retryHook()
-			s.logger.Info("sync any", "msg", log.NewLazySprintf("Discovering snapshots for %v", discoveryTime))
+			s.logger.Info("sync any", "msg", fmt.Sprintf("Discovering snapshots for %v", discoveryTime))
 			time.Sleep(discoveryTime)
 			continue
 		}
@@ -257,7 +253,7 @@ func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.
 	appHash, err := s.stateProvider.AppHash(hctx, snapshot.Height)
 	if err != nil {
 		s.logger.Info("failed to fetch and verify app hash", "err", err)
-		if err == light.ErrNoWitnesses {
+		if errors.Is(err, light.ErrNoWitnesses) {
 			return sm.State{}, nil, err
 		}
 		return sm.State{}, nil, errRejectSnapshot
@@ -284,7 +280,7 @@ func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.
 	state, err := s.stateProvider.State(pctx, snapshot.Height)
 	if err != nil {
 		s.logger.Info("failed to fetch and verify CometBFT state", "err", err)
-		if err == light.ErrNoWitnesses {
+		if errors.Is(err, light.ErrNoWitnesses) {
 			return sm.State{}, nil, err
 		}
 		return sm.State{}, nil, errRejectSnapshot
@@ -292,7 +288,7 @@ func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.
 	commit, err := s.stateProvider.Commit(pctx, snapshot.Height)
 	if err != nil {
 		s.logger.Info("failed to fetch and verify commit", "err", err)
-		if err == light.ErrNoWitnesses {
+		if errors.Is(err, light.ErrNoWitnesses) {
 			return sm.State{}, nil, err
 		}
 		return sm.State{}, nil, errRejectSnapshot
@@ -357,7 +353,7 @@ func (s *syncer) offerSnapshot(snapshot *snapshot) error {
 func (s *syncer) applyChunks(chunks *chunkQueue) error {
 	for {
 		chunk, err := chunks.Next()
-		if err == errDone {
+		if errors.Is(err, errDone) {
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to fetch chunk: %w", err)
@@ -366,7 +362,7 @@ func (s *syncer) applyChunks(chunks *chunkQueue) error {
 		resp, err := s.conn.ApplySnapshotChunk(context.TODO(), &abci.ApplySnapshotChunkRequest{
 			Index:  chunk.Index,
 			Chunk:  chunk.Chunk,
-			Sender: string(chunk.Sender),
+			Sender: chunk.Sender,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to apply chunk %v: %w", chunk.Index, err)
@@ -385,8 +381,8 @@ func (s *syncer) applyChunks(chunks *chunkQueue) error {
 		// Reject any senders as requested by the app
 		for _, sender := range resp.RejectSenders {
 			if sender != "" {
-				s.snapshots.RejectPeer(p2p.ID(sender))
-				err := chunks.DiscardSender(p2p.ID(sender))
+				s.snapshots.RejectPeer(sender)
+				err := chunks.DiscardSender(sender)
 				if err != nil {
 					return fmt.Errorf("failed to reject sender: %w", err)
 				}
@@ -465,7 +461,7 @@ func (s *syncer) requestChunk(snapshot *snapshot, chunk uint32) {
 	}
 	s.logger.Debug("Requesting snapshot chunk", "height", snapshot.Height,
 		"format", snapshot.Format, "chunk", chunk, "peer", peer.ID())
-	peer.Send(p2p.Envelope{
+	_ = peer.Send(p2p.Envelope{
 		ChannelID: ChunkChannel,
 		Message: &ssproto.ChunkRequest{
 			Height: snapshot.Height,

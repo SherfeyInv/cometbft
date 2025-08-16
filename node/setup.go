@@ -15,28 +15,32 @@ import (
 	_ "github.com/lib/pq" //nolint: gci // provide the psql db driver.
 
 	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/blocksync"
-	cs "github.com/cometbft/cometbft/internal/consensus"
-	"github.com/cometbft/cometbft/internal/evidence"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/light"
-	mempl "github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/p2p/pex"
-	"github.com/cometbft/cometbft/privval"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/state/indexer"
-	"github.com/cometbft/cometbft/state/indexer/block"
-	"github.com/cometbft/cometbft/state/txindex"
-	"github.com/cometbft/cometbft/statesync"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
-	"github.com/cometbft/cometbft/version"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/blocksync"
+	cs "github.com/cometbft/cometbft/v2/internal/consensus"
+	"github.com/cometbft/cometbft/v2/internal/evidence"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/light"
+	mempl "github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/p2p"
+	na "github.com/cometbft/cometbft/v2/p2p/netaddr"
+	"github.com/cometbft/cometbft/v2/p2p/pex"
+	"github.com/cometbft/cometbft/v2/p2p/transport"
+	"github.com/cometbft/cometbft/v2/p2p/transport/tcp"
+	tcpconn "github.com/cometbft/cometbft/v2/p2p/transport/tcp/conn"
+	"github.com/cometbft/cometbft/v2/privval"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/state/indexer"
+	"github.com/cometbft/cometbft/v2/state/indexer/block"
+	"github.com/cometbft/cometbft/v2/state/txindex"
+	"github.com/cometbft/cometbft/v2/statesync"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
 const readHeaderTimeout = 10 * time.Second
@@ -48,9 +52,25 @@ type ChecksummedGenesisDoc struct {
 	Sha256Checksum []byte
 }
 
+// Introduced to store parameters passed via cli and needed to start the node.
+// This parameters should not be stored or persisted in the config file.
+// This can then be further extended to include additional flags without further
+// API breaking changes.
+type CliParams struct {
+	// SHA-256 hash of the genesis file provided via the command line.
+	// This hash is used is compared against the computed hash of the
+	// actual genesis file or the hash stored in the database.
+	// If there is a mismatch between the hash provided via cli and the
+	// hash of the genesis file or the hash in the DB, the node will not boot.
+	GenesisHash []byte
+}
+
 // GenesisDocProvider returns a GenesisDoc together with its SHA256 checksum.
 // It allows the GenesisDoc to be pulled from sources other than the
 // filesystem, for instance from a distributed key-value store cluster.
+// It is the responsibility of the GenesisDocProvider to ensure that the SHA256
+// checksum correctly matches the GenesisDoc, that is:
+// sha256(GenesisDoc) == Sha256Checksum.
 type GenesisDocProvider func() (ChecksummedGenesisDoc, error)
 
 // DefaultGenesisDocProviderFunc returns a GenesisDocProvider that loads
@@ -59,7 +79,7 @@ func DefaultGenesisDocProviderFunc(config *cfg.Config) GenesisDocProvider {
 	return func() (ChecksummedGenesisDoc, error) {
 		// FIXME: find a way to stream the file incrementally,
 		// for the JSON	parser and the checksum computation.
-		// https://github.com/cometbft/cometbft/issues/1302
+		// https://github.com/cometbft/cometbft/v2/issues/1302
 		jsonBlob, err := os.ReadFile(config.GenesisFile())
 		if err != nil {
 			return ChecksummedGenesisDoc{}, ErrorReadingGenesisDoc{Err: err}
@@ -74,25 +94,44 @@ func DefaultGenesisDocProviderFunc(config *cfg.Config) GenesisDocProvider {
 }
 
 // Provider takes a config and a logger and returns a ready to go Node.
-type Provider func(*cfg.Config, log.Logger) (*Node, error)
+type Provider func(*cfg.Config, log.Logger, CliParams, func() (crypto.PrivKey, error)) (*Node, error)
 
 // DefaultNewNode returns a CometBFT node with default settings for the
 // PrivValidator, ClientCreator, GenesisDoc, and DBProvider.
-// It implements NodeProvider.
-func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
+// It implements Provider.
+func DefaultNewNode(
+	config *cfg.Config,
+	logger log.Logger,
+	cliParams CliParams,
+	keyGenF func() (crypto.PrivKey, error),
+) (*Node, error) {
 	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
 	if err != nil {
 		return nil, ErrorLoadOrGenNodeKey{Err: err, NodeKeyFile: config.NodeKeyFile()}
 	}
 
-	return NewNode(context.Background(), config,
-		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+	pv, err := privval.LoadOrGenFilePV(
+		config.PrivValidatorKeyFile(),
+		config.PrivValidatorStateFile(),
+		keyGenF,
+	)
+	if err != nil {
+		return nil, ErrorLoadOrGenFilePV{
+			Err:       err,
+			KeyFile:   config.PrivValidatorKeyFile(),
+			StateFile: config.PrivValidatorStateFile(),
+		}
+	}
+
+	return NewNodeWithCliParams(context.Background(), config,
+		pv,
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
 		DefaultGenesisDocProviderFunc(config),
 		cfg.DefaultDBProvider,
 		DefaultMetricsProvider(config.Instrumentation),
 		logger,
+		cliParams,
 	)
 }
 
@@ -194,13 +233,14 @@ func doHandshake(
 	blockStore sm.BlockStore,
 	genDoc *types.GenesisDoc,
 	eventBus types.BlockEventPublisher,
+	appInfoResponse *abci.InfoResponse,
 	proxyApp proxy.AppConns,
 	consensusLogger log.Logger,
 ) error {
 	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc)
 	handshaker.SetLogger(consensusLogger)
 	handshaker.SetEventBus(eventBus)
-	if err := handshaker.Handshake(ctx, proxyApp); err != nil {
+	if err := handshaker.Handshake(ctx, appInfoResponse, proxyApp); err != nil {
 		return fmt.Errorf("error during handshake: %v", err)
 	}
 	return nil
@@ -233,34 +273,44 @@ func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusL
 	}
 }
 
-func onlyValidatorIsUs(state sm.State, pubKey crypto.PubKey) bool {
-	if state.Validators.Size() > 1 {
-		return false
-	}
-	addr, _ := state.Validators.GetByIndex(0)
-	return bytes.Equal(pubKey.Address(), addr)
-}
-
 // createMempoolAndMempoolReactor creates a mempool and a mempool reactor based on the config.
 func createMempoolAndMempoolReactor(
 	config *cfg.Config,
 	proxyApp proxy.AppConns,
 	state sm.State,
+	eventBus *types.EventBus,
 	waitSync bool,
 	memplMetrics *mempl.Metrics,
 	logger log.Logger,
-) (mempl.Mempool, waitSyncP2PReactor) {
+	appInfoResponse *abci.InfoResponse,
+) (mempl.Mempool, mempoolReactor) {
 	switch config.Mempool.Type {
 	// allow empty string for backward compatibility
 	case cfg.MempoolTypeFlood, "":
+		lanesInfo, err := mempl.BuildLanesInfo(appInfoResponse.LanePriorities, appInfoResponse.DefaultLane)
+		if err != nil {
+			panic(fmt.Sprintf("could not get lanes info from app: %s", err))
+		}
+
 		logger = logger.With("module", "mempool")
-		mp := mempl.NewCListMempool(
-			config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
+		options := []mempl.CListMempoolOption{
 			mempl.WithMetrics(memplMetrics),
 			mempl.WithPreCheck(sm.TxPreCheck(state)),
 			mempl.WithPostCheck(sm.TxPostCheck(state)),
+		}
+		if config.Mempool.ExperimentalPublishEventPendingTx {
+			options = append(options, mempl.WithNewTxCallback(func(tx types.Tx) {
+				_ = eventBus.PublishEventPendingTx(types.EventDataPendingTx{
+					Tx: tx,
+				})
+			}))
+		}
+		mp := mempl.NewCListMempool(
+			config.Mempool,
+			proxyApp.Mempool(),
+			lanesInfo,
+			state.LastBlockHeight,
+			options...,
 		)
 		mp.SetLogger(logger)
 		reactor := mempl.NewReactor(
@@ -305,13 +355,14 @@ func createBlocksyncReactor(config *cfg.Config,
 	blockExec *sm.BlockExecutor,
 	blockStore *store.BlockStore,
 	blockSync bool,
+	localAddr crypto.Address,
 	logger log.Logger,
 	metrics *blocksync.Metrics,
 	offlineStateSyncHeight int64,
 ) (bcReactor p2p.Reactor, err error) {
 	switch config.BlockSync.Version {
 	case "v0":
-		bcReactor = blocksync.NewReactor(state.Copy(), blockExec, blockStore, blockSync, metrics, offlineStateSyncHeight)
+		bcReactor = blocksync.NewReactor(state.Copy(), blockExec, blockStore, blockSync, localAddr, metrics, offlineStateSyncHeight)
 	case "v1", "v2":
 		return nil, fmt.Errorf("block sync version %s has been deprecated. Please use v0", config.BlockSync.Version)
 	default:
@@ -359,22 +410,27 @@ func createConsensusReactor(config *cfg.Config,
 
 func createTransport(
 	config *cfg.Config,
-	nodeInfo p2p.NodeInfo,
 	nodeKey *p2p.NodeKey,
 	proxyApp proxy.AppConns,
 ) (
-	*p2p.MultiplexTransport,
+	*tcp.MultiplexTransport,
 	[]p2p.PeerFilterFunc,
 ) {
+	tcpConfig := tcpconn.DefaultMConnConfig()
+	tcpConfig.FlushThrottle = config.P2P.FlushThrottleTimeout
+	tcpConfig.SendRate = config.P2P.SendRate
+	tcpConfig.RecvRate = config.P2P.RecvRate
+	tcpConfig.MaxPacketMsgPayloadSize = config.P2P.MaxPacketMsgPayloadSize
+	tcpConfig.TestFuzz = config.P2P.TestFuzz
+	tcpConfig.TestFuzzConfig = config.P2P.TestFuzzConfig
 	var (
-		mConnConfig = p2p.MConnConfig(config.P2P)
-		transport   = p2p.NewMultiplexTransport(nodeInfo, *nodeKey, mConnConfig)
-		connFilters = []p2p.ConnFilterFunc{}
+		transport   = tcp.NewMultiplexTransport(*nodeKey, tcpConfig)
+		connFilters = []tcp.ConnFilterFunc{}
 		peerFilters = []p2p.PeerFilterFunc{}
 	)
 
 	if !config.P2P.AllowDuplicateIP {
-		connFilters = append(connFilters, p2p.ConnDuplicateIPFilter())
+		connFilters = append(connFilters, tcp.ConnDuplicateIPFilter())
 	}
 
 	// Filter peers by addr or pubkey with an ABCI query.
@@ -383,7 +439,7 @@ func createTransport(
 		connFilters = append(
 			connFilters,
 			// ABCI query for address filtering.
-			func(_ p2p.ConnSet, c net.Conn, _ []net.IP) error {
+			func(_ tcp.ConnSet, c net.Conn, _ []net.IP) error {
 				res, err := proxyApp.Query().Query(context.TODO(), &abci.QueryRequest{
 					Path: "/p2p/filter/addr/" + c.RemoteAddr().String(),
 				})
@@ -403,7 +459,7 @@ func createTransport(
 			// ABCI query for ID filtering.
 			func(_ p2p.IPeerSet, p p2p.Peer) error {
 				res, err := proxyApp.Query().Query(context.TODO(), &abci.QueryRequest{
-					Path: fmt.Sprintf("/p2p/filter/id/%s", p.ID()),
+					Path: "/p2p/filter/id/" + p.ID(),
 				})
 				if err != nil {
 					return err
@@ -417,17 +473,17 @@ func createTransport(
 		)
 	}
 
-	p2p.MultiplexTransportConnFilters(connFilters...)(transport)
+	tcp.MultiplexTransportConnFilters(connFilters...)(transport)
 
 	// Limit the number of incoming connections.
 	max := config.P2P.MaxNumInboundPeers + len(splitAndTrimEmpty(config.P2P.UnconditionalPeerIDs, ",", " "))
-	p2p.MultiplexTransportMaxIncomingConnections(max)(transport)
+	tcp.MultiplexTransportMaxIncomingConnections(max)(transport)
 
 	return transport, peerFilters
 }
 
 func createSwitch(config *cfg.Config,
-	transport p2p.Transport,
+	transport transport.Transport,
 	p2pMetrics *p2p.Metrics,
 	peerFilters []p2p.PeerFilterFunc,
 	mempoolReactor p2p.Reactor,
@@ -469,14 +525,14 @@ func createAddrBookAndSetOnSwitch(config *cfg.Config, sw *p2p.Switch,
 
 	// Add ourselves to addrbook to prevent dialing ourselves
 	if config.P2P.ExternalAddress != "" {
-		addr, err := p2p.NewNetAddressString(p2p.IDAddressString(nodeKey.ID(), config.P2P.ExternalAddress))
+		addr, err := na.NewFromString(na.IDAddrString(nodeKey.ID(), config.P2P.ExternalAddress))
 		if err != nil {
 			return nil, fmt.Errorf("p2p.external_address is incorrect: %w", err)
 		}
 		addrBook.AddOurAddress(addr)
 	}
 	if config.P2P.ListenAddress != "" {
-		addr, err := p2p.NewNetAddressString(p2p.IDAddressString(nodeKey.ID(), config.P2P.ListenAddress))
+		addr, err := na.NewFromString(na.IDAddrString(nodeKey.ID(), config.P2P.ListenAddress))
 		if err != nil {
 			return nil, fmt.Errorf("p2p.laddr is incorrect: %w", err)
 		}
@@ -512,14 +568,13 @@ func createPEXReactorAndAddToSwitch(addrBook pex.AddrBook, config *cfg.Config,
 // startStateSync starts an asynchronous state sync process, then switches to block sync mode.
 func startStateSync(
 	ssR *statesync.Reactor,
-	bcR blockSyncReactor,
 	stateProvider statesync.StateProvider,
 	config *cfg.StateSyncConfig,
 	stateStore sm.Store,
 	blockStore *store.BlockStore,
 	state sm.State,
 	dbKeyLayoutVersion string,
-) error {
+) (chan sm.State, chan error, error) {
 	ssR.Logger.Info("Starting state sync")
 
 	if stateProvider == nil {
@@ -536,34 +591,36 @@ func startStateSync(
 			}, ssR.Logger.With("module", "light"),
 			dbKeyLayoutVersion)
 		if err != nil {
-			return fmt.Errorf("failed to set up light client state provider: %w", err)
+			return nil, nil, fmt.Errorf("failed to set up light client state provider: %w", err)
 		}
 	}
 
+	// Run statesync in a separate goroutine in order not to block `Node.Start`
+	stateCh := make(chan sm.State, 1)
+	errc := make(chan error, 1)
 	go func() {
-		state, commit, err := ssR.Sync(stateProvider, config.DiscoveryTime)
+		newState, commit, err := ssR.Sync(stateProvider, config.MaxDiscoveryTime)
 		if err != nil {
-			ssR.Logger.Error("State sync failed", "err", err)
-			return
-		}
-		err = stateStore.Bootstrap(state)
-		if err != nil {
-			ssR.Logger.Error("Failed to bootstrap node with new state", "err", err)
-			return
-		}
-		err = blockStore.SaveSeenCommit(state.LastBlockHeight, commit)
-		if err != nil {
-			ssR.Logger.Error("Failed to store last seen commit", "err", err)
+			errc <- fmt.Errorf("statesync: %w", err)
 			return
 		}
 
-		err = bcR.SwitchToBlockSync(state)
+		err = stateStore.Bootstrap(newState)
 		if err != nil {
-			ssR.Logger.Error("Failed to switch to block sync", "err", err)
+			errc <- fmt.Errorf("bootstrap: %w", err)
 			return
 		}
+
+		err = blockStore.SaveSeenCommit(newState.LastBlockHeight, commit)
+		if err != nil {
+			errc <- fmt.Errorf("save seen commit: %w", err)
+			return
+		}
+
+		stateCh <- newState
 	}()
-	return nil
+
+	return stateCh, errc, nil
 }
 
 // ------------------------------------------------------------------------------
@@ -591,6 +648,12 @@ func LoadStateFromDBOrGenesisDocProviderWithConfig(
 
 	if err = csGenDoc.GenesisDoc.ValidateAndComplete(); err != nil {
 		return sm.State{}, nil, ErrGenesisDoc{Err: err}
+	}
+
+	checkSumStr := hex.EncodeToString(csGenDoc.Sha256Checksum)
+	if err := tmhash.ValidateSHA256(checkSumStr); err != nil {
+		const formatStr = "invalid genesis doc SHA256 checksum: %s"
+		return sm.State{}, nil, fmt.Errorf(formatStr, err)
 	}
 
 	// Validate that existing or recently saved genesis file hash matches optional --genesis_hash passed by operator

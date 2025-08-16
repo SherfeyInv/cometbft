@@ -20,7 +20,7 @@ var (
 	ErrLoadedGenesisDocHashMismatch = errors.New("genesis doc hash in db does not match loaded genesis doc")
 )
 
-// ErrCreateBlockStore is returned when the node fails to create the blockstore.
+// ErrLightClientStateProvider is returned when the node fails to create the blockstore.
 type ErrLightClientStateProvider struct {
 	Err error
 }
@@ -155,13 +155,26 @@ func (e ErrDialPeers) Unwrap() error {
 	return e.Err
 }
 
-// ErrStartStateSync is returned when the node fails to start state sync.
+// ErrHandshake is returned when CometBFT fails to complete the handshake with the ABCI app.
+type ErrHandshake struct {
+	Err error
+}
+
+func (e ErrHandshake) Error() string {
+	return fmt.Sprintf("could not complete handshake with the app: %v", e.Err)
+}
+
+func (e ErrHandshake) Unwrap() error {
+	return e.Err
+}
+
+// ErrStartStateSync is returned when the node fails to start the statesync.
 type ErrStartStateSync struct {
 	Err error
 }
 
 func (e ErrStartStateSync) Error() string {
-	return fmt.Sprintf("failed to start state sync: %v", e.Err)
+	return fmt.Sprintf("failed to start statesync: %v", e.Err)
 }
 
 func (e ErrStartStateSync) Unwrap() error {
@@ -234,7 +247,7 @@ func (e ErrSaveGenesisDocHash) Unwrap() error {
 	return e.Err
 }
 
-// ErrReadingGenesisDoc is returned when the node fails to read the genesis doc file.
+// ErrorReadingGenesisDoc is returned when the node fails to read the genesis doc file.
 type ErrorReadingGenesisDoc struct {
 	Err error
 }
@@ -254,9 +267,25 @@ type ErrorLoadOrGenNodeKey struct {
 }
 
 func (e ErrorLoadOrGenNodeKey) Error() string {
-	return fmt.Sprintf("failed to load or gen node key %s: %v", e.NodeKeyFile, e.Err)
+	return fmt.Sprintf("failed to load or generate node key %s: %v", e.NodeKeyFile, e.Err)
 }
 
 func (e ErrorLoadOrGenNodeKey) Unwrap() error {
+	return e.Err
+}
+
+// ErrorLoadOrGenFilePV is returned when the node fails to load or generate priv validator file.
+type ErrorLoadOrGenFilePV struct {
+	Err       error
+	KeyFile   string
+	StateFile string
+}
+
+func (e ErrorLoadOrGenFilePV) Error() string {
+	return fmt.Sprintf("failed to load or generate privval file; "+
+		"key file %s, state file %s: %v", e.KeyFile, e.StateFile, e.Err)
+}
+
+func (e ErrorLoadOrGenFilePV) Unwrap() error {
 	return e.Err
 }

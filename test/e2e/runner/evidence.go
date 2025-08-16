@@ -11,14 +11,14 @@ import (
 	"time"
 
 	cmtversion "github.com/cometbft/cometbft/api/cometbft/version/v1"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/test"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	"github.com/cometbft/cometbft/privval"
-	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
-	"github.com/cometbft/cometbft/types"
-	"github.com/cometbft/cometbft/version"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/v2/privval"
+	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
+	"github.com/cometbft/cometbft/v2/types"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
 // 1 in 4 evidence is light client evidence, the rest is duplicate vote evidence.
@@ -105,8 +105,12 @@ func InjectEvidence(ctx context.Context, r *rand.Rand, testnet *e2e.Testnet, amo
 			if dve.VoteA.Height < testnet.VoteExtensionsEnableHeight {
 				dve.VoteA.Extension = nil
 				dve.VoteA.ExtensionSignature = nil
+				dve.VoteA.NonRpExtension = nil
+				dve.VoteA.NonRpExtensionSignature = nil
 				dve.VoteB.Extension = nil
 				dve.VoteB.ExtensionSignature = nil
+				dve.VoteB.NonRpExtension = nil
+				dve.VoteB.NonRpExtensionSignature = nil
 			}
 			ev = dve
 		}

@@ -7,43 +7,48 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	"github.com/cometbft/cometbft/libs/service"
+	"github.com/cometbft/cometbft/v2/crypto/ed25519"
+	"github.com/cometbft/cometbft/v2/libs/service"
+	ni "github.com/cometbft/cometbft/v2/p2p/internal/nodeinfo"
+	"github.com/cometbft/cometbft/v2/p2p/internal/nodekey"
+	na "github.com/cometbft/cometbft/v2/p2p/netaddr"
+	"github.com/cometbft/cometbft/v2/p2p/transport"
 )
 
 // mockPeer for testing the PeerSet.
 type mockPeer struct {
 	service.BaseService
 	ip net.IP
-	id ID
+	id nodekey.ID
 }
 
-func (mp *mockPeer) FlushStop()            { mp.Stop() } //nolint:errcheck // ignore error
-func (*mockPeer) TrySend(Envelope) bool    { return true }
-func (*mockPeer) Send(Envelope) bool       { return true }
-func (*mockPeer) NodeInfo() NodeInfo       { return DefaultNodeInfo{} }
-func (*mockPeer) Status() ConnectionStatus { return ConnectionStatus{} }
-func (mp *mockPeer) ID() ID                { return mp.id }
-func (*mockPeer) IsOutbound() bool         { return false }
-func (*mockPeer) IsPersistent() bool       { return true }
-func (*mockPeer) Get(s string) any         { return s }
-func (*mockPeer) Set(string, any)          {}
-func (mp *mockPeer) RemoteIP() net.IP      { return mp.ip }
-func (*mockPeer) SocketAddr() *NetAddress  { return nil }
-func (mp *mockPeer) RemoteAddr() net.Addr  { return &net.TCPAddr{IP: mp.ip, Port: 8800} }
-func (*mockPeer) CloseConn() error         { return nil }
-func (*mockPeer) SetRemovalFailed()        {}
-func (*mockPeer) GetRemovalFailed() bool   { return false }
+func (mp *mockPeer) FlushStop()                  { mp.Stop() } //nolint:errcheck // ignore error
+func (*mockPeer) HasChannel(byte) bool           { return true }
+func (*mockPeer) TrySend(Envelope) error         { return nil }
+func (*mockPeer) Send(Envelope) error            { return nil }
+func (*mockPeer) NodeInfo() ni.NodeInfo          { return ni.Default{} }
+func (*mockPeer) ConnState() transport.ConnState { return transport.ConnState{} }
+func (mp *mockPeer) ID() nodekey.ID              { return mp.id }
+func (*mockPeer) IsOutbound() bool               { return false }
+func (*mockPeer) IsPersistent() bool             { return true }
+func (*mockPeer) Get(s string) any               { return s }
+func (*mockPeer) Set(string, any)                {}
+func (mp *mockPeer) RemoteIP() net.IP            { return mp.ip }
+func (*mockPeer) SocketAddr() *na.NetAddr        { return nil }
+func (mp *mockPeer) RemoteAddr() net.Addr        { return &net.TCPAddr{IP: mp.ip, Port: 8800} }
+func (*mockPeer) Conn() transport.Conn           { return nil }
+func (*mockPeer) SetRemovalFailed()              {}
+func (*mockPeer) GetRemovalFailed() bool         { return false }
 
 // Returns a mock peer.
 func newMockPeer(ip net.IP) *mockPeer {
 	if ip == nil {
 		ip = net.IP{127, 0, 0, 1}
 	}
-	nodeKey := NodeKey{PrivKey: ed25519.GenPrivKey()}
+	nk := nodekey.NodeKey{PrivKey: ed25519.GenPrivKey()}
 	return &mockPeer{
 		ip: ip,
-		id: nodeKey.ID(),
+		id: nk.ID(),
 	}
 }
 

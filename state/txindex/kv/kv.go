@@ -15,21 +15,22 @@ import (
 	"github.com/cosmos/gogoproto/proto"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	idxutil "github.com/cometbft/cometbft/internal/indexer"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/libs/pubsub/query"
-	"github.com/cometbft/cometbft/libs/pubsub/query/syntax"
-	"github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/state/indexer"
-	"github.com/cometbft/cometbft/state/txindex"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	idxutil "github.com/cometbft/cometbft/v2/internal/indexer"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/libs/pubsub/query"
+	"github.com/cometbft/cometbft/v2/libs/pubsub/query/syntax"
+	"github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/state/indexer"
+	"github.com/cometbft/cometbft/v2/state/txindex"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 const (
-	tagKeySeparator     = "/"
-	tagKeySeparatorRune = '/'
-	eventSeqSeparator   = "$es$"
+	tagKeySeparator          = "/"
+	tagKeySeparatorRune      = '/'
+	eventSeqSeparator        = "$es$"
+	eventSeqSeperatorRuneAt0 = '$'
 )
 
 var (
@@ -58,6 +59,15 @@ func WithCompaction(compact bool, compactionInterval int64) IndexerOption {
 		txi.compact = compact
 		txi.compactionInterval = compactionInterval
 	}
+}
+
+// Close closes the indexer's underlying database. The caller is responsible for
+// calling Close when done with the indexer.
+func (txi *TxIndex) Close() error {
+	if err := txi.store.Close(); err != nil {
+		return fmt.Errorf("closing transaction index: %w", err)
+	}
+	return nil
 }
 
 func (txi *TxIndex) Prune(retainHeight int64) (numPruned int64, newRetainHeight int64, err error) {
@@ -355,7 +365,7 @@ func (txi *TxIndex) deleteEvents(result *abci.TxResult, batch dbm.Batch) error {
 				continue
 			}
 
-			compositeTag := fmt.Sprintf("%s.%s", event.Type, attr.Key)
+			compositeTag := event.Type + "." + attr.Key
 			if attr.GetIndex() {
 				zeroKey := keyForEvent(compositeTag, attr.Value, result, 0)
 				endKey := keyForEvent(compositeTag, attr.Value, result, math.MaxInt64)
@@ -389,7 +399,7 @@ func (txi *TxIndex) indexEvents(result *abci.TxResult, hash []byte, store dbm.Ba
 			}
 
 			// index if `index: true` is set
-			compositeTag := fmt.Sprintf("%s.%s", event.Type, attr.Key)
+			compositeTag := event.Type + "." + attr.Key
 			// ensure event does not conflict with a reserved prefix key
 			if compositeTag == types.TxHashKey || compositeTag == types.TxHeightKey {
 				return fmt.Errorf("event type and attribute key \"%s\" is reserved; please use a different key", compositeTag)
@@ -404,6 +414,38 @@ func (txi *TxIndex) indexEvents(result *abci.TxResult, hash []byte, store dbm.Ba
 	}
 
 	return nil
+}
+
+type hashKey struct {
+	hash   string
+	height int64
+}
+
+type hashKeySorter struct {
+	keys []hashKey
+	by   func(t1, t2 *hashKey) bool
+}
+
+func (t *hashKeySorter) Less(i, j int) bool { return t.by(&t.keys[i], &t.keys[j]) }
+func (t *hashKeySorter) Len() int           { return len(t.keys) }
+func (t *hashKeySorter) Swap(i, j int)      { t.keys[i], t.keys[j] = t.keys[j], t.keys[i] }
+
+func byHeightDesc(i, j *hashKey) bool {
+	hi := i.height
+	hj := j.height
+	if hi == hj {
+		return i.hash > j.hash
+	}
+	return hi > hj
+}
+
+func byHeightAsc(i, j *hashKey) bool {
+	hi := i.height
+	hj := j.height
+	if hi == hj {
+		return i.hash < j.hash
+	}
+	return hi < hj
 }
 
 // Search performs a search using the given query.
@@ -515,26 +557,23 @@ func (txi *TxIndex) Search(ctx context.Context, q *query.Query, pagSettings txin
 	numResults := len(filteredHashes)
 
 	// Convert map keys to slice for deterministic ordering
-	hashKeys := make([]string, 0, numResults)
-	for k := range filteredHashes {
-		hashKeys = append(hashKeys, k)
+	hashKeys := make([]hashKey, 0, numResults)
+	for k, v := range filteredHashes {
+		hashKeys = append(hashKeys, hashKey{hash: k, height: v.Height})
+	}
+
+	var by func(i, j *hashKey) bool
+
+	if pagSettings.OrderDesc {
+		by = byHeightDesc
+	} else {
+		by = byHeightAsc
 	}
 
 	// Sort by height
-	sort.Slice(hashKeys, func(i, j int) bool {
-		hi := filteredHashes[hashKeys[i]].Height
-		hj := filteredHashes[hashKeys[j]].Height
-		if hi == hj {
-			// If heights are equal, sort lexicographically
-			if pagSettings.OrderDesc {
-				return hashKeys[i] > hashKeys[j]
-			}
-			return hashKeys[i] < hashKeys[j]
-		}
-		if pagSettings.OrderDesc {
-			return hi > hj
-		}
-		return hi < hj
+	sort.Sort(&hashKeySorter{
+		keys: hashKeys,
+		by:   by,
 	})
 
 	// If paginated, determine which hash keys to return
@@ -565,7 +604,7 @@ func (txi *TxIndex) Search(ctx context.Context, q *query.Query, pagSettings txin
 	resultMap := make(map[string]struct{})
 RESULTS_LOOP:
 	for _, hKey := range hashKeys {
-		h := filteredHashes[hKey].TxBytes
+		h := filteredHashes[hKey.hash].TxBytes
 		res, err := txi.Get(h)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to get Tx{%X}: %w", h, err)
@@ -602,12 +641,17 @@ type TxInfo struct {
 }
 
 func (*TxIndex) setTmpHashes(tmpHeights map[string]TxInfo, key, value []byte, height int64) {
+	// value comes from cometbft-db Iterator interface Value() API.
+	// Therefore, we must make a copy before storing references to it.
+	valueCp := make([]byte, len(value))
+	copy(valueCp, value)
+
 	eventSeq := extractEventSeqFromKey(key)
 	txInfo := TxInfo{
-		TxBytes: value,
+		TxBytes: valueCp,
 		Height:  height,
 	}
-	tmpHeights[string(value)+eventSeq] = txInfo
+	tmpHeights[string(valueCp)+eventSeq] = txInfo
 }
 
 // match returns all matching txs by hash that meet a given condition and start
@@ -829,9 +873,6 @@ func (txi *TxIndex) matchRange(
 
 LOOP:
 	for ; it.Valid(); it.Next() {
-		// TODO: We need to make a function for getting it.Key() as a byte slice with no copies.
-		// It currently copies the source data (which can change on a subsequent .Next() call) but that
-		// is not an issue for us.
 		key := it.Key()
 		if !isTagKey(key) {
 			continue
@@ -995,13 +1036,21 @@ func extractValueFromKey(key []byte) string {
 }
 
 func extractEventSeqFromKey(key []byte) string {
-	parts := strings.Split(string(key), tagKeySeparator)
+	endPos := bytes.LastIndexByte(key, tagKeySeparatorRune)
 
-	lastEl := parts[len(parts)-1]
-
-	if strings.Contains(lastEl, eventSeqSeparator) {
-		return strings.SplitN(lastEl, eventSeqSeparator, 2)[1]
+	if endPos == -1 {
+		return "0"
 	}
+
+	for ; endPos < len(key); endPos++ {
+		if key[endPos] == eventSeqSeperatorRuneAt0 {
+			eventSeq := string(key[endPos:])
+			if eventSeq, ok := strings.CutPrefix(eventSeq, eventSeqSeparator); ok {
+				return eventSeq
+			}
+		}
+	}
+
 	return "0"
 }
 

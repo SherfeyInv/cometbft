@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cometbft/cometbft/internal/bits"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
+	"github.com/cometbft/cometbft/v2/internal/bits"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
 )
 
 const (
@@ -207,7 +207,7 @@ func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
 	}
 
 	// If we already know of this vote, return false.
-	if existing, ok := voteSet.getVote(valIndex, blockKey); ok {
+	if existing, ok := voteSet.getVote(valIndex, blockKey, &vote.BlockID); ok {
 		if bytes.Equal(existing.Signature, vote.Signature) {
 			return false, nil // duplicate
 		}
@@ -223,10 +223,13 @@ func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
 		if err := vote.Verify(voteSet.chainID, val.PubKey); err != nil {
 			return false, fmt.Errorf("failed to verify vote with ChainID %s and PubKey %s: %w", voteSet.chainID, val.PubKey, err)
 		}
-		if len(vote.ExtensionSignature) > 0 || len(vote.Extension) > 0 {
-			return false, fmt.Errorf("unexpected vote extension data present in vote; ext_len %d, sig_len %d",
+		if len(vote.ExtensionSignature) > 0 || len(vote.Extension) > 0 ||
+			len(vote.NonRpExtensionSignature) > 0 || len(vote.NonRpExtension) > 0 {
+			return false, fmt.Errorf("unexpected vote extension data present in vote; ext_len %d, sig_len %d, nrp_ext_len %d, nrp_sig_len %d",
 				len(vote.Extension),
 				len(vote.ExtensionSignature),
+				len(vote.NonRpExtension),
+				len(vote.NonRpExtensionSignature),
 			)
 		}
 	}
@@ -243,8 +246,8 @@ func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
 }
 
 // getVote returns (vote, true) if vote exists for valIndex and blockKey.
-func (voteSet *VoteSet) getVote(valIndex int32, blockKey string) (vote *Vote, ok bool) {
-	if existing := voteSet.votes[valIndex]; existing != nil && existing.BlockID.Key() == blockKey {
+func (voteSet *VoteSet) getVote(valIndex int32, blockKey string, blockID *BlockID) (vote *Vote, ok bool) {
+	if existing := voteSet.votes[valIndex]; existing != nil && blockID.Equals(existing.BlockID) {
 		return existing, true
 	}
 	if existing := voteSet.votesByBlock[blockKey].getByIndex(valIndex); existing != nil {
@@ -269,7 +272,7 @@ func (voteSet *VoteSet) addVerifiedVote(
 		}
 		conflicting = existing
 		// Replace vote if blockKey matches voteSet.maj23.
-		if voteSet.maj23 != nil && voteSet.maj23.Key() == blockKey {
+		if voteSet.maj23 != nil && voteSet.maj23.Equals(vote.BlockID) {
 			voteSet.votes[valIndex] = vote
 			voteSet.votesBitArray.SetIndex(int(valIndex), true)
 		}
@@ -340,7 +343,6 @@ func (voteSet *VoteSet) SetPeerMaj23(peerID P2PID, blockID BlockID) error {
 	defer voteSet.mtx.Unlock()
 
 	blockKey := blockID.Key()
-
 	// Make sure peer hasn't already told us something.
 	if existing, ok := voteSet.peerMaj23s[peerID]; ok {
 		if existing.Equals(blockID) {

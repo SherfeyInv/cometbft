@@ -3,7 +3,7 @@ package log
 import (
 	"fmt"
 
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
 )
 
 type LazySprintf struct {
@@ -22,21 +22,25 @@ func (l *LazySprintf) String() string {
 	return fmt.Sprintf(l.format, l.args...)
 }
 
-type LazyBlockHash struct {
-	block hashable
+// LazyHash is a wrapper around a hashable object that defers the Hash call
+// until the Stringer interface is invoked.
+// This is particularly useful for avoiding calling Sprintf when debugging is
+// not active.
+type LazyHash struct {
+	inner hashable
 }
 
 type hashable interface {
 	Hash() cmtbytes.HexBytes
 }
 
-// NewLazyBlockHash defers block Hash until the Stringer interface is invoked.
+// NewLazyHash defers calling `Hash()` until the Stringer interface is invoked.
 // This is particularly useful for avoiding calling Sprintf when debugging is not
 // active.
-func NewLazyBlockHash(block hashable) *LazyBlockHash {
-	return &LazyBlockHash{block}
+func NewLazyHash(inner hashable) *LazyHash {
+	return &LazyHash{inner}
 }
 
-func (l *LazyBlockHash) String() string {
-	return l.block.Hash().String()
+func (l *LazyHash) String() string {
+	return l.inner.Hash().String()
 }

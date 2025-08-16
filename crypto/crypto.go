@@ -1,8 +1,8 @@
 package crypto
 
 import (
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/libs/bytes"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/libs/bytes"
 )
 
 const (
@@ -19,11 +19,11 @@ func AddressHash(bz []byte) Address {
 	return Address(tmhash.SumTruncated(bz))
 }
 
+//go:generate ../scripts/mockery_generate.sh PubKey
 type PubKey interface {
 	Address() Address
 	Bytes() []byte
 	VerifySignature(msg []byte, sig []byte) bool
-	Equals(other PubKey) bool
 	Type() string
 }
 
@@ -31,7 +31,6 @@ type PrivKey interface {
 	Bytes() []byte
 	Sign(msg []byte) ([]byte, error)
 	PubKey() PubKey
-	Equals(other PrivKey) bool
 	Type() string
 }
 
@@ -42,7 +41,9 @@ type Symmetric interface {
 }
 
 // If a new key type implements batch verification,
-// the key type must be registered in github.com/cometbft/cometbft/crypto/batch.
+// the key type must be registered in github.com/cometbft/cometbft/v2/crypto/batch.
+//
+//go:generate ../scripts/mockery_generate.sh BatchVerifier
 type BatchVerifier interface {
 	// Add appends an entry into the BatchVerifier.
 	Add(key PubKey, message, signature []byte) error

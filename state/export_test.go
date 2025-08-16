@@ -2,8 +2,8 @@ package state
 
 import (
 	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 //
@@ -60,7 +60,7 @@ func SaveValidatorsInfo(db dbm.DB, height, lastHeightChanged int64, valSet *type
 	return nil
 }
 
-// FindMinBlockRetainHeight is an alias for the private
+// FindMinRetainHeight is an alias for the private
 // findMinBlockRetainHeight method in pruner.go, exported exclusively and
 // explicitly for testing.
 func (p *Pruner) FindMinRetainHeight() int64 {

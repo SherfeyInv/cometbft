@@ -18,7 +18,7 @@ case).
 As non-breaking changes land on `main`, they should also be backported to
 these backport branches.
 
-We use Mergify's [backport feature](https://mergify.io/features/backports) to
+We use Mergify's [backport feature](https://docs.mergify.com/workflow/actions/backport/) to
 automatically backport to the needed branch. There should be a label for any
 backport branch that you'll be targeting. To notify the bot to backport a pull
 request, mark the pull request with the label corresponding to the correct
@@ -174,8 +174,8 @@ backport branch (see above). Otherwise:
    * `git push origin api/v2.0.0-rc1`
    * Notice the prefix `api/`, which denotes that the version refers to the `api` module.
 5. Prepare the versioning:
-   * Bump CometBFT version in  `version.go`
-   * Bump P2P and block protocol versions in  `version.go`, if necessary.
+   * Bump CometBFT version in `version.go`
+   * Bump P2P and block protocol versions in `version.go`, if necessary.
      Check the changelog for breaking changes in these components.
    * Bump ABCI protocol version in `version.go`, if necessary
 6. Open a PR with these changes against the backport branch.
@@ -183,11 +183,13 @@ backport branch (see above). Otherwise:
    back down locally.
 8. Once you have the changes locally, create the new tag, specifying a name and
    a tag "message":
-   `git tag -a v2.0.0-rc1 -s -m "Release Candidate v2.0.0-rc1`
+   `git tag -a v2.0.0-rc1 -s -m "Release Candidate v2.0.0-rc1"`
 9.  Push the tag back up to origin:
    `git push origin v2.0.0-rc1`
    Now the tag should be available on the repo's releases page.
 10. Future pre-releases will continue to be built off of this branch.
+11. [Publish the proto changes](#publish-protos-to-the-buf-schema-registry) to the `Buf` schema registry `comet/comet`
+repository (if necessary).
 
 ## Major release
 
@@ -226,6 +228,8 @@ Before performing these steps, be sure the
    * `git push origin v2.0.0`
 6. Make sure that `main` is updated with the latest `CHANGELOG.md`,
    `CHANGELOG_PENDING.md`, and `UPGRADING.md`.
+7. [Publish the proto changes](#publish-protos-to-the-buf-schema-registry) to the `Buf` schema registry `comet/comet`
+repository (if necessary).
 
 ## Minor and patch releases
 
@@ -265,11 +269,13 @@ To create a patch release:
    * `git push origin v2.0.1`
 
    The process for minor releases is similar to patch releases:
-   * `git tag -a v2.1.0 -s -m 'Release v2.1.0`
+   * `git tag -a v2.1.0 -s -m 'Release v2.1.0'`
    * `git push origin v2.1.0`
 6. Create a pull request back to main with the CHANGELOG and version changes
    from the latest release.
    * Do not merge the backport branch into main.
+7. [Publish the proto changes](#publish-protos-to-the-buf-schema-registry) to the `Buf` schema registry `comet/comet`
+    repository (if necessary).
 
 After the release of `v1.0.0`, the backport branch is named `v1.x`. Any future minor or patch releases will be cut
 from the `v1.x` branch. There won't be a separate backport branch for minor releases, so there won't be a `v1.1.x` backport branch.
@@ -387,7 +393,7 @@ CometBFT v0.38.0 introduced **vote-extensions**, which are added as the name
 suggests, to precommit votes sent by validators. The Vote-extension Testnet is
 used to determine how vote-extensions affect the performance of CometBFT, under
 various settings. The application used in the experiment is the same used on the
-(#200-node-testnet), but is configured differently to gauge de effects of
+(#200-node-testnet), but is configured differently to gauge the effects of
 varying vote extension sizes. In the (#200-node-testnet) the application extends
 pre-commit votes with a 64 bit number encoded with variable compression. In the
 Vote-extension Testnet, pre-commit votes are extended with a non-compressed
@@ -426,6 +432,45 @@ of 150 validators is configured to only possess a cumulative stake of 67% of the
 total stake. The remaining 33% of the stake is configured to belong to a
 validator that is never actually run in the test network. The network is run for
 multiple days, ensuring that it is able to produce blocks without issue.
+
+## Publish protos to the Buf schema registry
+
+For each release, if necessary, publish the proto changes to the `Buf` schema registry `comet/comet` repository.
+
+* Install the `buf` tool:
+    * If you don't have the `buf` tool installed on your machine, please refer to the [Buf docs](https://buf.build/docs/installation)
+      in order to learn how to install it.
+* Ensure you have access to `Buf` and that you can login and publish files:
+    * Go to [Buf schema registry](https://buf.build/)
+    * Click on `Sign in`. If you don't have an account, please create one.
+    * Once you sign in, click on your username (top right), and in the dropdown menu select `Organizations`.
+    * Ensure that you can see `cometbft` under Organizations and it shows `Writer` role on the right side.
+    * If you can't see `cometbft` or you don't see the `Writer` role, please reach out to one of the CometBFT team members who have
+      admin access in Buf for the `cometbft` organization so they can grant you the right permissions.
+    * If you see `cometbft` and have `Writer` role, login in Buf via terminal:
+        - `buf registry login`
+    * When prompted for the username, type it and hit enter. It will ask for a `token` next.
+    * Go back to the Buf website and click on your username, and select `Settings`.
+    * Click on `Create new token`, add a name and select an expiry date.
+    * Once the token is created, copy the token code from the website and paste it on the terminal and hit enter. You
+      should see a message saying `Credentials saved ...`
+* Publish the files:
+    * Checkout the new release that was tagged:
+        - `git checkout v2.0.0-rc1`
+    * Change to the proto directory:
+        - `cd proto`
+    * Lint the protos:
+        - `buf lint`
+    * Update the dependencies:
+        - `buf dep update`
+    * Build the files
+        - `buf build`
+    * Push the files to the registry. This will publish a commit to the Buf registry using the last
+      commit checksum from the release.
+        - `buf push --tag "$(git rev-parse HEAD)"`
+    * Go to the `Commits` section for the `cometbft/cometbft` repository and ensure that you
+      can see commit just [published there](https://buf.build/cometbft/cometbft/commits).
+    * All set, the Buf registry now hosts the [latest proto files](https://buf.build/cometbft/cometbft) in the `cometbft/cometbft` repository.
 
 [unclog]: https://github.com/informalsystems/unclog
 [unclog-release]: https://github.com/informalsystems/unclog#releasing-a-new-versions-change-set

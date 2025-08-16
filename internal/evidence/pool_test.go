@@ -11,15 +11,15 @@ import (
 
 	dbm "github.com/cometbft/cometbft-db"
 	cmtversion "github.com/cometbft/cometbft/api/cometbft/version/v1"
-	"github.com/cometbft/cometbft/internal/evidence"
-	"github.com/cometbft/cometbft/internal/evidence/mocks"
-	"github.com/cometbft/cometbft/internal/test"
-	"github.com/cometbft/cometbft/libs/log"
-	sm "github.com/cometbft/cometbft/state"
-	smmocks "github.com/cometbft/cometbft/state/mocks"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
-	"github.com/cometbft/cometbft/version"
+	"github.com/cometbft/cometbft/v2/internal/evidence"
+	"github.com/cometbft/cometbft/v2/internal/evidence/mocks"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	sm "github.com/cometbft/cometbft/v2/state"
+	smmocks "github.com/cometbft/cometbft/v2/state/mocks"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
 func TestMain(m *testing.M) {
@@ -85,7 +85,19 @@ func TestEvidencePoolBasic(t *testing.T) {
 	next := pool.EvidenceFront()
 	assert.Equal(t, ev, next.Value.(types.Evidence))
 
-	const evidenceBytes int64 = 372
+	var evidenceBytes int64
+	if pubK, err := privVals[0].GetPubKey(); err != nil {
+		t.Fatal(err)
+	} else {
+		switch pubK.Type() {
+		case "secp256k1eth":
+			evidenceBytes = 374
+		default:
+			// default valid for ed25519, scp256k1
+			evidenceBytes = 372
+		}
+	}
+
 	evs, size = pool.PendingEvidence(evidenceBytes)
 	assert.Len(t, evs, 1)
 	assert.Equal(t, evidenceBytes, size) // check that the size of the single evidence in bytes is correct
@@ -440,7 +452,8 @@ func makeExtCommit(height int64, valAddr []byte) *types.ExtendedCommit {
 				Timestamp:        defaultEvidenceTime,
 				Signature:        []byte("Signature"),
 			},
-			ExtensionSignature: []byte("Extended Signature"),
+			ExtensionSignature:      []byte("Extended Signature"),
+			NonRpExtensionSignature: []byte("Non Replay Protected Extended Signature"),
 		}},
 	}
 }

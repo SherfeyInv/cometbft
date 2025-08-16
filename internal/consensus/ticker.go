@@ -3,11 +3,11 @@ package consensus
 import (
 	"time"
 
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/libs/service"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/libs/service"
 )
 
-var tickTockBufferSize = 10
+const tickTockBufferSize = 10
 
 // TimeoutTicker is a timer that schedules timeouts
 // conditional on the height/round/step in the timeoutInfo.
@@ -81,10 +81,7 @@ func (t *timeoutTicker) stopTimer() {
 	if !t.timerActive {
 		return
 	}
-	// Stop() returns false if it was already fired or was stopped
-	if !t.timer.Stop() {
-		<-t.timer.C
-	}
+	_ = t.timer.Stop()
 	t.timerActive = false
 }
 

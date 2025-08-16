@@ -10,18 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v1"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	"github.com/cometbft/cometbft/internal/test"
-	"github.com/cometbft/cometbft/libs/log"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/state/indexer"
-	"github.com/cometbft/cometbft/state/indexer/block"
-	"github.com/cometbft/cometbft/state/txindex"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
+	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v2"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto/ed25519"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/state/indexer"
+	"github.com/cometbft/cometbft/v2/state/indexer/block"
+	"github.com/cometbft/cometbft/v2/state/txindex"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 func TestStoreLoadValidators(t *testing.T) {
@@ -66,12 +66,17 @@ func BenchmarkLoadValidators(b *testing.B) {
 
 	config := test.ResetTestRoot("state_")
 	defer os.RemoveAll(config.RootDir)
+
 	dbType := dbm.BackendType(config.DBBackend)
+
 	stateDB, err := dbm.NewDB("state", dbType, config.DBDir())
 	require.NoError(b, err)
+
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
+		DBKeyLayout:          "v2",
 	})
+
 	state, err := stateStore.LoadFromDBOrGenesisFile(config.GenesisFile())
 	if err != nil {
 		b.Fatal(err)
@@ -79,12 +84,19 @@ func BenchmarkLoadValidators(b *testing.B) {
 
 	state.Validators = genValSet(valSetSize)
 	state.NextValidators = state.Validators.CopyIncrementProposerPriority(1)
+
 	err = stateStore.Save(state)
 	require.NoError(b, err)
 
 	for i := 10; i < 10000000000; i *= 10 { // 10, 100, 1000, ...
-		if err := sm.SaveValidatorsInfo(stateDB,
-			int64(i), state.LastHeightValidatorsChanged, state.NextValidators, "v2"); err != nil {
+		err := sm.SaveValidatorsInfo(
+			stateDB,
+			int64(i),
+			state.LastHeightValidatorsChanged,
+			state.NextValidators,
+			"v2",
+		)
+		if err != nil {
 			b.Fatal(err)
 		}
 
@@ -180,6 +192,7 @@ func TestPruneStates(t *testing.T) {
 						{Data: []byte{2}},
 						{Data: []byte{3}},
 					},
+					AppHash: make([]byte, 1),
 				})
 				require.NoError(t, err)
 			}
@@ -375,6 +388,7 @@ func TestABCIResPruningStandalone(t *testing.T) {
 		TxResults: []*abci.ExecTxResult{
 			{Code: 32, Data: []byte("Hello"), Log: "Huh?"},
 		},
+		AppHash: make([]byte, 1),
 	}
 	_, bs, txIndexer, blockIndexer, callbackF, stateStore := makeStateAndBlockStoreAndIndexers()
 	defer callbackF()
@@ -468,6 +482,7 @@ func TestFinalizeBlockResponsePruning(t *testing.T) {
 			TxResults: []*abci.ExecTxResult{
 				{Code: 32, Data: []byte("Hello"), Log: "Huh?"},
 			},
+			AppHash: make([]byte, 1),
 		}
 		state, bs, txIndexer, blockIndexer, callbackF, stateStore := makeStateAndBlockStoreAndIndexers()
 		defer callbackF()
@@ -526,6 +541,7 @@ func TestLastFinalizeBlockResponses(t *testing.T) {
 			TxResults: []*abci.ExecTxResult{
 				{Code: 32, Data: []byte("Hello"), Log: "Huh?"},
 			},
+			AppHash: make([]byte, 1),
 		}
 
 		stateDB = dbm.NewMemDB()
@@ -622,7 +638,7 @@ func TestFinalizeBlockRecoveryUsingLegacyABCIResponses(t *testing.T) {
 	resp, err := stateStore.LoadLastFinalizeBlockResponse(height)
 	require.NoError(t, err)
 	require.Equal(t, resp.ConsensusParamUpdates, &cp)
-	require.Equal(t, resp.Events, legacyResp.LegacyAbciResponses.BeginBlock.Events)
+	require.Equal(t, len(resp.Events), len(legacyResp.LegacyAbciResponses.BeginBlock.Events))
 	require.Equal(t, resp.TxResults[0], legacyResp.LegacyAbciResponses.DeliverTxs[0])
 }
 

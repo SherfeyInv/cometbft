@@ -15,17 +15,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-kit/log/term"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/internal/net"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/rpc/jsonrpc/client"
-	"github.com/cometbft/cometbft/rpc/jsonrpc/server"
-	"github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/v2/internal/net"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/rpc/jsonrpc/client"
+	"github.com/cometbft/cometbft/v2/rpc/jsonrpc/server"
+	"github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
 )
 
 // Client and Server should work over tcp or unix sockets.
@@ -109,22 +108,9 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-var colorFn = func(keyvals ...any) term.FgBgColor {
-	for i := 0; i < len(keyvals)-1; i += 2 {
-		if keyvals[i] == "socket" {
-			if keyvals[i+1] == "tcp" {
-				return term.FgBgColor{Fg: term.DarkBlue}
-			} else if keyvals[i+1] == "unix" {
-				return term.FgBgColor{Fg: term.DarkCyan}
-			}
-		}
-	}
-	return term.FgBgColor{}
-}
-
 // launch unix and tcp servers.
 func setup() {
-	logger := log.NewTMLoggerWithColorFn(log.NewSyncWriter(os.Stdout), colorFn)
+	logger := log.NewLogger(os.Stdout)
 
 	cmd := exec.Command("rm", "-f", unixSocket)
 	err := cmd.Start()
@@ -273,7 +259,7 @@ func echoViaWS(cl *client.WSClient, val string) (string, error) {
 
 	msg := <-cl.ResponsesCh
 	if msg.Error != nil {
-		return "", err
+		return "", msg.Error
 	}
 	result := new(ResultEcho)
 	err = json.Unmarshal(msg.Result, result)
@@ -410,7 +396,7 @@ func TestWSNewWSRPCFunc(t *testing.T) {
 
 	msg := <-cl.ResponsesCh
 	if msg.Error != nil {
-		t.Fatal(err)
+		t.Fatal(msg.Error)
 	}
 	result := new(ResultEcho)
 	err = json.Unmarshal(msg.Result, result)
@@ -440,7 +426,7 @@ func TestWSNewWSRPCFuncV1(t *testing.T) {
 
 	msg := <-cl.ResponsesCh
 	if msg.Error != nil {
-		t.Fatal(err)
+		t.Fatal(msg.Error)
 	}
 	result := new(ResultEcho)
 	err = json.Unmarshal(msg.Result, result)
@@ -468,7 +454,7 @@ func TestWSHandlesArrayParams(t *testing.T) {
 
 	msg := <-cl.ResponsesCh
 	if msg.Error != nil {
-		t.Fatalf("%+v", err)
+		t.Fatalf("%+v", msg.Error)
 	}
 	result := new(ResultEcho)
 	err = json.Unmarshal(msg.Result, result)
@@ -496,7 +482,7 @@ func TestWSHandlesArrayParamsV1(t *testing.T) {
 
 	msg := <-cl.ResponsesCh
 	if msg.Error != nil {
-		t.Fatalf("%+v", err)
+		t.Fatalf("%+v", msg.Error)
 	}
 	result := new(ResultEcho)
 	err = json.Unmarshal(msg.Result, result)

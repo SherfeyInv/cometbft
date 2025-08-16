@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abcitypes "github.com/cometbft/cometbft/abci/types"
-	cmtcfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/internal/test"
-	blockmocks "github.com/cometbft/cometbft/state/indexer/mocks"
-	"github.com/cometbft/cometbft/state/mocks"
-	txmocks "github.com/cometbft/cometbft/state/txindex/mocks"
-	"github.com/cometbft/cometbft/types"
+	abcitypes "github.com/cometbft/cometbft/v2/abci/types"
+	cmtcfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	blockmocks "github.com/cometbft/cometbft/v2/state/indexer/mocks"
+	"github.com/cometbft/cometbft/v2/state/mocks"
+	txmocks "github.com/cometbft/cometbft/v2/state/txindex/mocks"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 const (
@@ -112,11 +112,11 @@ func TestLoadBlockStore(t *testing.T) {
 	_, _, err := loadStateAndBlockStore(cfg)
 	require.Error(t, err)
 
-	_, err = dbm.NewDB("blockstore", dbm.GoLevelDBBackend, cfg.DBDir())
+	_, err = dbm.NewDB("blockstore", dbm.PebbleDBBackend, cfg.DBDir())
 	require.NoError(t, err)
 
 	// Get StateStore
-	_, err = dbm.NewDB("state", dbm.GoLevelDBBackend, cfg.DBDir())
+	_, err = dbm.NewDB("state", dbm.PebbleDBBackend, cfg.DBDir())
 	require.NoError(t, err)
 
 	bs, ss, err := loadStateAndBlockStore(cfg)

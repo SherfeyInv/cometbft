@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/cometbft/cometbft/libs/log"
+	"github.com/cometbft/cometbft/v2/libs/log"
 )
 
 var (
@@ -17,7 +17,7 @@ var (
 	flagProfAddr    = "pprof-laddr"
 	flagFrequency   = "frequency"
 
-	logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	logger = log.NewLogger(os.Stdout)
 )
 
 // DebugCmd defines the root command containing subcommands that assist in

@@ -10,12 +10,12 @@ import (
 	"reflect"
 	"time"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli)
@@ -77,7 +77,9 @@ func (cs *State) readReplayMessage(msg *TimedWALMessage, newStepSub types.Subscr
 		case *VoteMessage:
 			v := msg.Vote
 			cs.Logger.Info("Replay: Vote", "height", v.Height, "round", v.Round, "type", v.Type,
-				"blockID", v.BlockID, "peer", peerID, "extensionLen", len(v.Extension), "extSigLen", len(v.ExtensionSignature))
+				"blockID", v.BlockID, "peer", peerID,
+				"extensionLen", len(v.Extension), "extSigLen", len(v.ExtensionSignature),
+				"nrp-extensionLen", len(v.NonRpExtension), "nrp-extSigLen", len(v.NonRpExtensionSignature))
 		}
 
 		cs.handleMsg(m)
@@ -238,12 +240,10 @@ func (h *Handshaker) NBlocks() int {
 	return h.nBlocks
 }
 
-// TODO: retry the handshake/replay if it fails ?
-func (h *Handshaker) Handshake(ctx context.Context, proxyApp proxy.AppConns) error {
-	// Handshake is done via ABCI Info on the query conn.
-	res, err := proxyApp.Query().Info(ctx, proxy.InfoRequest)
-	if err != nil {
-		return fmt.Errorf("error calling Info: %v", err)
+// Handshake receives information from the app via ABCI Info on the query conn that is passed to the function.
+func (h *Handshaker) Handshake(ctx context.Context, res *abci.InfoResponse, proxyApp proxy.AppConns) error {
+	if res == nil {
+		return errors.New("empty ABCI Info response passed to handshake")
 	}
 
 	blockHeight := res.LastBlockHeight
@@ -265,7 +265,7 @@ func (h *Handshaker) Handshake(ctx context.Context, proxyApp proxy.AppConns) err
 	}
 
 	// Replay blocks up to the latest in the blockstore.
-	appHash, err = h.ReplayBlocks(ctx, h.initialState, appHash, blockHeight, proxyApp)
+	appHash, err := h.ReplayBlocks(ctx, h.initialState, appHash, blockHeight, proxyApp)
 	if err != nil {
 		return fmt.Errorf("error on replay: %v", err)
 	}

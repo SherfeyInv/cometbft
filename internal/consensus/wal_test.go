@@ -15,17 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/autofile"
-	"github.com/cometbft/cometbft/internal/consensus/types"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	"github.com/cometbft/cometbft/internal/test"
-	"github.com/cometbft/cometbft/libs/log"
-	sm "github.com/cometbft/cometbft/state"
-	cmttypes "github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/autofile"
+	"github.com/cometbft/cometbft/v2/internal/consensus/types"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	sm "github.com/cometbft/cometbft/v2/state"
+	cmttypes "github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 const (
@@ -33,6 +33,8 @@ const (
 )
 
 func TestWALTruncate(t *testing.T) {
+	const numBlocks = 60
+
 	walDir, err := os.MkdirTemp("", "wal")
 	require.NoError(t, err)
 	defer os.RemoveAll(walDir)
@@ -63,7 +65,7 @@ func TestWALTruncate(t *testing.T) {
 	// 60 block's size nearly 70K, greater than group's headBuf size(4096 * 10),
 	// when headBuf is full, truncate content will Flush to the file. at this
 	// time, RotateFile is called, truncate content exist in each file.
-	err = WALGenerateNBlocks(t, wal.Group(), 60, getConfig(t))
+	err = WALGenerateNBlocks(t, wal.Group(), numBlocks, getConfig(t))
 	require.NoError(t, err)
 
 	time.Sleep(1 * time.Millisecond) // wait groupCheckDuration, make sure RotateFile run
@@ -143,7 +145,8 @@ func TestWALEncoderDecoderMultiVersion(t *testing.T) {
 	now := time.Time{}.AddDate(100, 10, 20)
 	v038Data, _ := hex.DecodeString("a570586b000000c50a0b0880e2c3b1a4feffffff0112b50112b2010aa7011aa4010aa1010820102a180d200c2a480a2001c073624aaf3978514ef8443bb2a859c75fc3cc6af26d5aaa20926f046baa6612240805122001c073624aaf3978514ef8443bb2a859c75fc3cc6af26d5aaa20926f046baa66320b0880e2c3b1a4feffffff013a404942b2803552651e1c7e7b72557cdade0a4c5a638dcda9822ec402d42c5f75c767f62c0f3fb0d58aef7842a4e18964faaff3d17559989cf1f11dd006e31a9d0f12064e6f626f6479")
 
-	ss, privVals := makeState(1, "execution_chain")
+	ss, privVals, err := makeState(1, "execution_chain")
+	require.NoError(t, err)
 	var pVal cmttypes.PrivValidator
 	for mk := range privVals {
 		pVal = privVals[mk]
@@ -167,7 +170,7 @@ func TestWALEncoderDecoderMultiVersion(t *testing.T) {
 	}
 
 	pp := p.ToProto()
-	err := vs.SignProposal(ss.ChainID, pp)
+	err = vs.SignProposal(ss.ChainID, pp)
 	require.NoError(t, err)
 	p.Signature = pp.Signature
 
@@ -204,7 +207,8 @@ func TestWALEncoderDecoderMultiVersion(t *testing.T) {
 func TestWALEncoder(t *testing.T) {
 	now := time.Time{}.AddDate(100, 10, 20)
 
-	ss, privVals := makeState(1, "execution_chain")
+	ss, privVals, err := makeState(1, "execution_chain")
+	require.NoError(t, err)
 	var pVal cmttypes.PrivValidator
 	for mk := range privVals {
 		pVal = privVals[mk]
@@ -228,7 +232,7 @@ func TestWALEncoder(t *testing.T) {
 	}
 
 	pp := p.ToProto()
-	err := vs.SignProposal(ss.ChainID, pp)
+	err = vs.SignProposal(ss.ChainID, pp)
 	require.NoError(t, err)
 	p.Signature = pp.Signature
 
@@ -361,15 +365,18 @@ func TestWALPeriodicSync(t *testing.T) {
 }
 
 // FIXME: this helper is very similar to the one in ../../state/helpers_test.go.
-func makeState(nVals int, chainID string) (sm.State, map[string]cmttypes.PrivValidator) {
+func makeState(nVals int, chainID string) (sm.State, map[string]cmttypes.PrivValidator, error) {
 	vals, privVals := test.GenesisValidatorSet(nVals)
 
-	s, _ := sm.MakeGenesisState(&cmttypes.GenesisDoc{
+	s, err := sm.MakeGenesisState(&cmttypes.GenesisDoc{
 		ChainID:         chainID,
 		Validators:      vals,
 		AppHash:         nil,
 		ConsensusParams: test.ConsensusParams(),
 	})
+	if err != nil {
+		return sm.State{}, nil, err
+	}
 
 	stateDB := dbm.NewMemDB()
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
@@ -379,21 +386,8 @@ func makeState(nVals int, chainID string) (sm.State, map[string]cmttypes.PrivVal
 		panic(err)
 	}
 
-	return s, privVals
+	return s, privVals, nil
 }
-
-/*
-var initOnce sync.Once
-
-func registerInterfacesOnce() {
-	initOnce.Do(func() {
-		var _ = wire.RegisterInterface(
-			struct{ WALMessage }{},
-			wire.ConcreteType{[]byte{}, 0x10},
-		)
-	})
-}
-*/
 
 func nBytes(n int) []byte {
 	buf := make([]byte, n)
@@ -403,7 +397,6 @@ func nBytes(n int) []byte {
 
 func benchmarkWalDecode(b *testing.B, n int) {
 	b.Helper()
-	// registerInterfacesOnce()
 
 	buf := new(bytes.Buffer)
 	enc := NewWALEncoder(buf)

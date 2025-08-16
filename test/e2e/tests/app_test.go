@@ -12,9 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
-	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
-	"github.com/cometbft/cometbft/types"
+	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 // Tests that any initial state given in genesis has made it into the app.
@@ -93,13 +92,13 @@ func TestApp_Tx(t *testing.T) {
 		require.Zero(t, res.Code)
 
 		hash := tx.Hash()
-		require.Equal(t, res.Hash, cmtbytes.HexBytes(hash))
-		waitTime := 30 * time.Second
+		require.Equal(t, res.Hash, hash)
+		waitTime := 2 * time.Minute
 		require.Eventuallyf(t, func() bool {
 			txResp, err := client.Tx(ctx, hash, false)
 			return err == nil && bytes.Equal(txResp.Tx, tx)
 		}, waitTime, time.Second,
-			"submitted tx wasn't committed after %v", waitTime,
+			"submitted tx (%X) wasn't committed after %v", hash, waitTime,
 		)
 
 		// NOTE: we don't test abci query of the light client

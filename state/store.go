@@ -4,20 +4,21 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cosmos/gogoproto/proto"
-	"github.com/go-kit/kit/metrics"
 	"github.com/google/orderedcode"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v1"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	cmtos "github.com/cometbft/cometbft/internal/os"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtmath "github.com/cometbft/cometbft/libs/math"
-	"github.com/cometbft/cometbft/types"
+	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v2"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	cmtos "github.com/cometbft/cometbft/v2/internal/os"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtmath "github.com/cometbft/cometbft/v2/libs/math"
+	"github.com/cometbft/cometbft/v2/libs/metrics"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 const (
@@ -42,21 +43,65 @@ type KeyLayout interface {
 	CalcABCIResponsesKey(height int64) []byte
 }
 
+// v1LegacyLayout is a legacy implementation of BlockKeyLayout, kept for backwards
+// compatibility. Newer code should use [v2Layout].
 type v1LegacyLayout struct{}
 
+// In the following [v1LegacyLayout] methods, we preallocate the key's slice to speed
+// up append operations and avoid extra allocations.
+// The size of the slice is the length of the prefix plus the length the string
+// representation of a 64-bit integer. Namely, the longest 64-bit int has 19 digits,
+// therefore its string representation is 20 bytes long (19 digits + 1 byte for the
+// sign).
+
 // CalcABCIResponsesKey implements StateKeyLayout.
+// It returns a database key of the form "abciResponsesKey:<height>" to store/
+// retrieve the response of FinalizeBlock (i.e., the results of executing a block)
+// for the block at the given height to/from
+// the database.
 func (v1LegacyLayout) CalcABCIResponsesKey(height int64) []byte {
-	return []byte(fmt.Sprintf("abciResponsesKey:%v", height))
+	const (
+		prefix    = "abciResponsesKey:"
+		prefixLen = len(prefix)
+	)
+	key := make([]byte, 0, prefixLen+20)
+
+	key = append(key, prefix...)
+	key = strconv.AppendInt(key, height, 10)
+
+	return key
 }
 
-// store.StoreOptions.DBKeyLayout.calcConsensusParamsKey implements StateKeyLayout.
+// CalcConsensusParamsKey implements StateKeyLayout.
+// It returns a database key of the form "consensusParamsKey:<height>" to store/
+// retrieve the consensus parameters at the given height to/from the database.
 func (v1LegacyLayout) CalcConsensusParamsKey(height int64) []byte {
-	return []byte(fmt.Sprintf("consensusParamsKey:%v", height))
+	const (
+		prefix    = "consensusParamsKey:"
+		prefixLen = len(prefix)
+	)
+	key := make([]byte, 0, prefixLen+20)
+
+	key = append(key, prefix...)
+	key = strconv.AppendInt(key, height, 10)
+
+	return key
 }
 
-// store.StoreOptions.DBKeyLayout.CalcValidatorsKey implements StateKeyLayout.
+// CalcValidatorsKey implements StateKeyLayout.
+// It returns a database key of the form "validatorsKey:<height>" to store/retrieve
+// the validators set at the given height to/from the database.
 func (v1LegacyLayout) CalcValidatorsKey(height int64) []byte {
-	return []byte(fmt.Sprintf("validatorsKey:%v", height))
+	const (
+		prefix    = "validatorsKey:"
+		prefixLen = len(prefix)
+	)
+	key := make([]byte, 0, prefixLen+20)
+
+	key = append(key, prefix...)
+	key = strconv.AppendInt(key, height, 10)
+
+	return key
 }
 
 var _ KeyLayout = (*v1LegacyLayout)(nil)
@@ -122,7 +167,7 @@ type Store interface {
 	LoadValidators(height int64) (*types.ValidatorSet, error)
 	// LoadFinalizeBlockResponse loads the abciResponse for a given height
 	LoadFinalizeBlockResponse(height int64) (*abci.FinalizeBlockResponse, error)
-	// LoadLastABCIResponse loads the last abciResponse for a given height
+	// LoadLastFinalizeBlockResponse loads the last abciResponse for a given height
 	LoadLastFinalizeBlockResponse(height int64) (*abci.FinalizeBlockResponse, error)
 	// LoadConsensusParams loads the consensus params for a given height
 	LoadConsensusParams(height int64) (types.ConsensusParams, error)
@@ -237,10 +282,18 @@ func NewStore(db dbm.DB, options StoreOptions) Store {
 		StoreOptions: options,
 	}
 
+	if options.DBKeyLayout == "" {
+		options.DBKeyLayout = "v1"
+	}
+
 	dbKeyLayoutVersion := setDBKeyLayout(&store, options.DBKeyLayout)
 
 	if options.Logger != nil {
-		options.Logger.Info("State store key layout version ", "version", "v"+dbKeyLayoutVersion)
+		options.Logger.Info(
+			"State store key layout version ",
+			"version",
+			"v"+dbKeyLayoutVersion,
+		)
 	}
 
 	return store
@@ -653,14 +706,22 @@ func (store dbStore) LoadFinalizeBlockResponse(height int64) (*abci.FinalizeBloc
 
 	resp := new(abci.FinalizeBlockResponse)
 	err = resp.Unmarshal(buf)
-	if err != nil {
+	// Check for an error or if the resp.AppHash is nil if so
+	// this means the unmarshalling should be a LegacyABCIResponses
+	// Depending on a source message content (serialized as ABCIResponses)
+	// there are instances where it can be deserialized as a FinalizeBlockResponse
+	// without causing an error. But the values will not be deserialized properly
+	// and, it will contain zero values, and one of them is an AppHash == nil
+	// This can be verified in the /state/compatibility_test.go file
+	if err != nil || resp.AppHash == nil {
 		// The data might be of the legacy ABCI response type, so
 		// we try to unmarshal that
 		legacyResp := new(cmtstate.LegacyABCIResponses)
-		rerr := legacyResp.Unmarshal(buf)
-		if rerr != nil {
-			cmtos.Exit(fmt.Sprintf(`LoadFinalizeBlockResponse: Data has been corrupted or its spec has
-					changed: %v\n`, err))
+		if err := legacyResp.Unmarshal(buf); err != nil {
+			// only return an error, this method is only invoked through the `/block_results` not for state logic and
+			// some tests, so no need to exit cometbft if there's an error, just return it.
+			store.Logger.Error("failed in LoadFinalizeBlockResponse", "error", ErrABCIResponseCorruptedOrSpecChangeForHeight{Height: height, Err: err})
+			return nil, ErrABCIResponseCorruptedOrSpecChangeForHeight{Height: height, Err: err}
 		}
 		// The state store contains the old format. Migrate to
 		// the new FinalizeBlockResponse format. Note that the
@@ -670,10 +731,11 @@ func (store dbStore) LoadFinalizeBlockResponse(height int64) (*abci.FinalizeBloc
 
 	// TODO: ensure that buf is completely read.
 
+	// Otherwise return the FinalizeBlockResponse
 	return resp, nil
 }
 
-// LoadLastFinalizeBlockResponses loads the FinalizeBlockResponses from the most recent height.
+// LoadLastFinalizeBlockResponse loads the FinalizeBlockResponses from the most recent height.
 // The height parameter is used to ensure that the response corresponds to the latest height.
 // If not, an error is returned.
 //
@@ -1088,14 +1150,52 @@ func min(a int64, b int64) int64 {
 // responseFinalizeBlockFromLegacy is a convenience function that takes the old abci responses and morphs
 // it to the finalize block response. Note that the app hash is missing.
 func responseFinalizeBlockFromLegacy(legacyResp *cmtstate.LegacyABCIResponses) *abci.FinalizeBlockResponse {
-	return &abci.FinalizeBlockResponse{
-		TxResults:             legacyResp.DeliverTxs,
-		ValidatorUpdates:      legacyResp.EndBlock.ValidatorUpdates,
-		ConsensusParamUpdates: legacyResp.EndBlock.ConsensusParamUpdates,
-		Events:                append(legacyResp.BeginBlock.Events, legacyResp.EndBlock.Events...),
-		// NOTE: AppHash is missing in the response but will
-		// be caught and filled in consensus/replay.go
+	var response abci.FinalizeBlockResponse
+	events := make([]abci.Event, 0)
+
+	if legacyResp.DeliverTxs != nil {
+		response.TxResults = legacyResp.DeliverTxs
 	}
+
+	// Check for begin block and end block and only append events or assign values if they are not nil
+	if legacyResp.BeginBlock != nil {
+		if legacyResp.BeginBlock.Events != nil {
+			// Add BeginBlock attribute to BeginBlock events
+			for idx := range legacyResp.BeginBlock.Events {
+				legacyResp.BeginBlock.Events[idx].Attributes = append(legacyResp.BeginBlock.Events[idx].Attributes, abci.EventAttribute{
+					Key:   "mode",
+					Value: "BeginBlock",
+					Index: false,
+				})
+			}
+			events = append(events, legacyResp.BeginBlock.Events...)
+		}
+	}
+	if legacyResp.EndBlock != nil {
+		if legacyResp.EndBlock.ValidatorUpdates != nil {
+			response.ValidatorUpdates = legacyResp.EndBlock.ValidatorUpdates
+		}
+		if legacyResp.EndBlock.ConsensusParamUpdates != nil {
+			response.ConsensusParamUpdates = legacyResp.EndBlock.ConsensusParamUpdates
+		}
+		if legacyResp.EndBlock.Events != nil {
+			// Add EndBlock attribute to BeginBlock events
+			for idx := range legacyResp.EndBlock.Events {
+				legacyResp.EndBlock.Events[idx].Attributes = append(legacyResp.EndBlock.Events[idx].Attributes, abci.EventAttribute{
+					Key:   "mode",
+					Value: "EndBlock",
+					Index: false,
+				})
+			}
+			events = append(events, legacyResp.EndBlock.Events...)
+		}
+	}
+
+	response.Events = events
+
+	// NOTE: AppHash is missing in the response but will
+	// be caught and filled in consensus/replay.go
+	return &response
 }
 
 // ----- Util.

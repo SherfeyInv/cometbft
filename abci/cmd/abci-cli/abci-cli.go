@@ -11,15 +11,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	abcicli "github.com/cometbft/cometbft/abci/client"
-	"github.com/cometbft/cometbft/abci/example/kvstore"
-	"github.com/cometbft/cometbft/abci/server"
-	servertest "github.com/cometbft/cometbft/abci/tests/server"
-	"github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/abci/version"
 	crypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
-	cmtos "github.com/cometbft/cometbft/internal/os"
-	"github.com/cometbft/cometbft/libs/log"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	"github.com/cometbft/cometbft/v2/abci/example/kvstore"
+	"github.com/cometbft/cometbft/v2/abci/server"
+	servertest "github.com/cometbft/cometbft/v2/abci/tests/server"
+	"github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/abci/version"
+	cmtos "github.com/cometbft/cometbft/v2/internal/os"
+	"github.com/cometbft/cometbft/v2/libs/log"
 )
 
 // client is a global variable so it can be reused by the console.
@@ -60,7 +60,7 @@ var RootCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			logger = log.NewFilter(log.NewTMLogger(log.NewSyncWriter(os.Stdout)), allowLevel)
+			logger = log.NewFilter(log.NewLogger(os.Stdout), allowLevel)
 		}
 		if client == nil {
 			var err error
@@ -696,7 +696,7 @@ func cmdProcessProposal(cmd *cobra.Command, args []string) error {
 }
 
 func cmdKVStore(*cobra.Command, []string) error {
-	logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	logger := log.NewLogger(os.Stdout)
 
 	// Create the application - in memory or persisted to disk
 	var app types.Application
@@ -747,7 +747,7 @@ func printResponse(cmd *cobra.Command, args []string, rsps ...response) {
 		}
 
 		if len(rsp.Data) != 0 {
-			// Do no print this line when using the finalize_block command
+			// Do not print this line when using the finalize_block command
 			// because the string comes out as gibberish
 			if cmd.Use != "finalize_block" {
 				fmt.Printf("-> data: %s\n", rsp.Data)

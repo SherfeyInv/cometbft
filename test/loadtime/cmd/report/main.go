@@ -10,12 +10,12 @@ import (
 	"strings"
 
 	dbm "github.com/cometbft/cometbft-db"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/test/loadtime/report"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/test/loadtime/report"
 )
 
 var (
-	db      = flag.String("database-type", "goleveldb", "the type of database holding the blockstore")
+	db      = flag.String("database-type", "pebbledb", "the type of database holding the blockstore")
 	dir     = flag.String("data-dir", "", "path to the directory containing the CometBFT databases")
 	csvOut  = flag.String("csv", "", "dump the extracted latencies as raw csv for use in additional tooling")
 	oneline = flag.Bool("oneline", false, "display the results in one line of comma-separated values")
@@ -94,7 +94,7 @@ func toCSVRecords(rs []report.Report) [][]string {
 	}
 	res := make([][]string, total+1)
 
-	res[0] = []string{"experiment_id", "block_time", "duration_ns", "tx_hash", "connections", "rate", "size"}
+	res[0] = []string{"experiment_id", "block_time", "duration_ns", "tx_hash", "lane", "connections", "rate", "size"}
 	offset := 1
 	for _, r := range rs {
 		idStr := r.ID.String()
@@ -102,7 +102,16 @@ func toCSVRecords(rs []report.Report) [][]string {
 		rateStr := strconv.FormatInt(int64(r.Rate), 10)
 		sizeStr := strconv.FormatInt(int64(r.Size), 10)
 		for i, v := range r.All {
-			res[offset+i] = []string{idStr, strconv.FormatInt(v.BlockTime.UnixNano(), 10), strconv.FormatInt(int64(v.Duration), 10), fmt.Sprintf("%X", v.Hash), connStr, rateStr, sizeStr}
+			res[offset+i] = []string{
+				idStr,
+				strconv.FormatInt(v.BlockTime.UnixNano(), 10),
+				strconv.FormatInt(int64(v.Duration), 10),
+				fmt.Sprintf("%X", v.Hash),
+				v.Lane,
+				connStr,
+				rateStr,
+				sizeStr,
+			}
 		}
 		offset += len(r.All)
 	}

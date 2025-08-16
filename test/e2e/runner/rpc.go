@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
-	rpctypes "github.com/cometbft/cometbft/rpc/core/types"
-	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
-	"github.com/cometbft/cometbft/types"
+	rpchttp "github.com/cometbft/cometbft/v2/rpc/client/http"
+	rpctypes "github.com/cometbft/cometbft/v2/rpc/core/types"
+	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 // waitForHeight waits for the network to reach a certain height (or above),
@@ -92,9 +92,11 @@ func waitForNode(ctx context.Context, node *e2e.Node, height int64, timeout time
 			return nil, ctx.Err()
 		case <-timer.C:
 			status, err := client.Status(ctx)
+			sinceLastChanged := time.Since(lastChanged)
 			switch {
-			case time.Since(lastChanged) > timeout:
-				return nil, fmt.Errorf("timed out waiting for %v to reach height %v", node.Name, height)
+			case sinceLastChanged > timeout:
+				return nil, fmt.Errorf("waiting for node %v timed out: exceeded %v wait timeout after waiting for %v",
+					node.Name, timeout, sinceLastChanged)
 			case err != nil:
 			case status.SyncInfo.LatestBlockHeight >= height && (height == 0 || !status.SyncInfo.CatchingUp):
 				return status, nil

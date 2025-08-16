@@ -13,31 +13,31 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/cometbft/cometbft/abci/server"
-	"github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	cmtnet "github.com/cometbft/cometbft/internal/net"
-	cmtflags "github.com/cometbft/cometbft/libs/cli/flags"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/light"
-	lproxy "github.com/cometbft/cometbft/light/proxy"
-	lrpc "github.com/cometbft/cometbft/light/rpc"
-	dbs "github.com/cometbft/cometbft/light/store/db"
-	"github.com/cometbft/cometbft/node"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/privval"
-	"github.com/cometbft/cometbft/proxy"
-	rpcserver "github.com/cometbft/cometbft/rpc/jsonrpc/server"
-	"github.com/cometbft/cometbft/test/e2e/app"
-	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
+	"github.com/cometbft/cometbft/v2/abci/server"
+	"github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/crypto/ed25519"
+	cmtnet "github.com/cometbft/cometbft/v2/internal/net"
+	cmtflags "github.com/cometbft/cometbft/v2/libs/cli/flags"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/light"
+	lproxy "github.com/cometbft/cometbft/v2/light/proxy"
+	lrpc "github.com/cometbft/cometbft/v2/light/rpc"
+	dbs "github.com/cometbft/cometbft/v2/light/store/db"
+	"github.com/cometbft/cometbft/v2/node"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/privval"
+	"github.com/cometbft/cometbft/v2/proxy"
+	rpcserver "github.com/cometbft/cometbft/v2/rpc/jsonrpc/server"
+	"github.com/cometbft/cometbft/v2/test/e2e/app"
+	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
 )
 
-var logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+var logger = log.NewLogger(os.Stdout)
 
 // main is the binary entrypoint.
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %v <configfile>", os.Args[0])
+		fmt.Printf("Usage: %v <configfile>\n", os.Args[0])
 		return
 	}
 	configFile := ""
@@ -137,8 +137,13 @@ func startNode(cfg *Config) error {
 		cmtcfg.Storage.ExperimentalKeyLayout = cfg.ExperimentalKeyLayout
 	}
 
+	// We hardcode ed25519 here because the priv validator files have already been set up in the setup step
+	pv, err := privval.LoadOrGenFilePV(cmtcfg.PrivValidatorKeyFile(), cmtcfg.PrivValidatorStateFile(), nil)
+	if err != nil {
+		return err
+	}
 	n, err := node.NewNode(context.Background(), cmtcfg,
-		privval.LoadOrGenFilePV(cmtcfg.PrivValidatorKeyFile(), cmtcfg.PrivValidatorStateFile()),
+		pv,
 		nodeKey,
 		clientCreator,
 		node.DefaultGenesisDocProviderFunc(cmtcfg),
@@ -263,15 +268,15 @@ func setupNode() (*config.Config, log.Logger, *p2p.NodeKey, error) {
 	}
 
 	if cmtcfg.LogFormat == config.LogFormatJSON {
-		logger = log.NewTMJSONLogger(log.NewSyncWriter(os.Stdout))
+		logger = log.NewJSONLogger(os.Stdout)
+	} else if !cmtcfg.LogColors {
+		logger = log.NewLoggerWithColor(os.Stdout, false)
 	}
 
 	nodeLogger, err := cmtflags.ParseLogLevel(cmtcfg.LogLevel, logger, config.DefaultLogLevel)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-
-	nodeLogger = nodeLogger.With("module", "main")
 
 	nodeKey, err := p2p.LoadOrGenNodeKey(cmtcfg.NodeKeyFile())
 	if err != nil {

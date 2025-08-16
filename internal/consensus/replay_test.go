@@ -19,20 +19,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	"github.com/cometbft/cometbft/abci/example/kvstore"
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/abci/types/mocks"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	cfg "github.com/cometbft/cometbft/config"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	"github.com/cometbft/cometbft/internal/test"
-	"github.com/cometbft/cometbft/libs/log"
-	mempl "github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/privval"
-	"github.com/cometbft/cometbft/proxy"
-	sm "github.com/cometbft/cometbft/state"
-	smmocks "github.com/cometbft/cometbft/state/mocks"
-	"github.com/cometbft/cometbft/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	"github.com/cometbft/cometbft/v2/abci/example/kvstore"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/abci/types/mocks"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	mempl "github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/privval"
+	"github.com/cometbft/cometbft/v2/proxy"
+	sm "github.com/cometbft/cometbft/v2/state"
+	smmocks "github.com/cometbft/cometbft/v2/state/mocks"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 func TestMain(m *testing.M) {
@@ -74,20 +74,24 @@ func startNewStateAndWaitForBlock(
 	t.Helper()
 	logger := log.TestingLogger()
 	state, _ := stateStore.LoadFromDBOrGenesisFile(consensusReplayConfig.GenesisFile())
-	privValidator := loadPrivValidator(consensusReplayConfig)
+	privValidator, err := loadPrivValidator(consensusReplayConfig)
+	require.NoError(t, err)
+	app := kvstore.NewInMemoryApplication()
+	_, lanesInfo := fetchAppInfo(app)
 	cs := newStateWithConfigAndBlockStore(
 		consensusReplayConfig,
 		state,
 		privValidator,
-		kvstore.NewInMemoryApplication(),
+		app,
 		blockDB,
+		lanesInfo,
 	)
 	cs.SetLogger(logger)
 
 	bytes, _ := os.ReadFile(cs.config.WalFile())
 	t.Logf("====== WAL: \n\r%X\n", bytes)
 
-	err := cs.Start()
+	err = cs.Start()
 	require.NoError(t, err)
 	defer func() {
 		if err := cs.Stop(); err != nil {
@@ -180,13 +184,17 @@ LOOP:
 		})
 		state, err := sm.MakeGenesisStateFromFile(consensusReplayConfig.GenesisFile())
 		require.NoError(t, err)
-		privValidator := loadPrivValidator(consensusReplayConfig)
+		privValidator, err := loadPrivValidator(consensusReplayConfig)
+		require.NoError(t, err)
+		app := kvstore.NewInMemoryApplication()
+		_, lanesInfo := fetchAppInfo(app)
 		cs := newStateWithConfigAndBlockStore(
 			consensusReplayConfig,
 			state,
 			privValidator,
 			kvstore.NewInMemoryApplication(),
 			blockDB,
+			lanesInfo,
 		)
 		cs.SetLogger(logger)
 
@@ -432,7 +440,7 @@ func setupChainWithChangingValidators(t *testing.T, name string, nBlocks int) (*
 			cssPubKey, err := css[cssIdx].privValidator.GetPubKey()
 			require.NoError(t, err)
 
-			if vsPubKey.Equals(cssPubKey) {
+			if vsPubKey.Type() == cssPubKey.Type() && bytes.Equal(vsPubKey.Bytes(), cssPubKey.Bytes()) {
 				return i
 			}
 		}
@@ -689,8 +697,10 @@ func testHandshakeReplay(t *testing.T, config *cfg.Config, nBlocks int, mode uin
 		}
 	})
 
+	abciInfoResp, err := proxyApp.Query().Info(context.Background(), proxy.InfoRequest)
+	require.NoError(t, err)
 	// perform the replay protocol to sync Tendermint and the application
-	err = handshaker.Handshake(context.Background(), proxyApp)
+	err = handshaker.Handshake(context.Background(), abciInfoResp, proxyApp)
 	if expectError {
 		require.Error(t, err)
 		// finish the test early
@@ -926,7 +936,9 @@ func TestHandshakePanicsIfAppReturnsWrongAppHash(t *testing.T) {
 
 		assert.Panics(t, func() {
 			h := NewHandshaker(stateStore, state, store, genDoc)
-			if err = h.Handshake(context.Background(), proxyApp); err != nil {
+			abciInfoResp, err := proxyApp.Query().Info(context.Background(), proxy.InfoRequest)
+			require.NoError(t, err)
+			if err = h.Handshake(context.Background(), abciInfoResp, proxyApp); err != nil {
 				t.Log(err)
 			}
 		})
@@ -950,7 +962,9 @@ func TestHandshakePanicsIfAppReturnsWrongAppHash(t *testing.T) {
 
 		assert.Panics(t, func() {
 			h := NewHandshaker(stateStore, state, store, genDoc)
-			if err = h.Handshake(context.Background(), proxyApp); err != nil {
+			abciInfoResp, err := proxyApp.Query().Info(context.Background(), proxy.InfoRequest)
+			require.NoError(t, err)
+			if err = h.Handshake(context.Background(), abciInfoResp, proxyApp); err != nil {
 				t.Log(err)
 			}
 		})
@@ -1246,7 +1260,9 @@ func TestHandshakeUpdatesValidators(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if err := handshaker.Handshake(context.Background(), proxyApp); err != nil {
+	abciInfoResp, err2 := proxyApp.Query().Info(context.Background(), proxy.InfoRequest)
+	require.NoError(t, err2)
+	if err := handshaker.Handshake(context.Background(), abciInfoResp, proxyApp); err != nil {
 		t.Fatalf("Error on abci handshake: %v", err)
 	}
 	var err error

@@ -7,12 +7,13 @@ import (
 	"sort"
 	"time"
 
-	flow "github.com/cometbft/cometbft/internal/flowrate"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/libs/service"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/types"
+	flow "github.com/cometbft/cometbft/v2/internal/flowrate"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/libs/service"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	"github.com/cometbft/cometbft/v2/p2p"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 /*
@@ -79,6 +80,7 @@ type BlockPool struct {
 	height     int64 // the lowest key in requesters.
 	// peers
 	peers         map[p2p.ID]*bpPeer
+	bannedPeers   map[p2p.ID]time.Time
 	sortedPeers   []*bpPeer // sorted by curRate, highest first
 	maxPeerHeight int64     // the biggest reported height
 
@@ -90,8 +92,8 @@ type BlockPool struct {
 // requests and errors will be sent to requestsCh and errorsCh accordingly.
 func NewBlockPool(start int64, requestsCh chan<- BlockRequest, errorsCh chan<- peerError) *BlockPool {
 	bp := &BlockPool{
-		peers: make(map[p2p.ID]*bpPeer),
-
+		peers:       make(map[p2p.ID]*bpPeer),
+		bannedPeers: make(map[p2p.ID]time.Time),
 		requesters:  make(map[int64]*bpRequester),
 		height:      start,
 		startHeight: start,
@@ -171,6 +173,12 @@ func (pool *BlockPool) removeTimedoutPeers() {
 
 		if peer.didTimeout {
 			pool.removePeer(peer.id)
+		}
+	}
+
+	for peerID := range pool.bannedPeers {
+		if !pool.isPeerBanned(peerID) {
+			delete(pool.bannedPeers, peerID)
 		}
 	}
 
@@ -255,6 +263,7 @@ func (pool *BlockPool) RemovePeerAndRedoAllPeerRequests(height int64) p2p.ID {
 	peerID := request.gotBlockFromPeerID()
 	// RemovePeer will redo all requesters associated with this peer.
 	pool.removePeer(peerID)
+	pool.banPeer(peerID)
 	return peerID
 }
 
@@ -284,17 +293,16 @@ func (pool *BlockPool) RedoRequest(height int64) p2p.ID {
 // need to switch over from block sync to consensus at this height. If the
 // height of the extended commit and the height of the block do not match, we
 // do not add the block and return an error.
-// TODO: ensure that blocks come in order for each peer.
 func (pool *BlockPool) AddBlock(peerID p2p.ID, block *types.Block, extCommit *types.ExtendedCommit, blockSize int) error {
-	pool.mtx.Lock()
-	defer pool.mtx.Unlock()
-
 	if extCommit != nil && block.Height != extCommit.Height {
 		err := fmt.Errorf("block height %d != extCommit height %d", block.Height, extCommit.Height)
 		// Peer sent us an invalid block => remove it.
 		pool.sendError(err, peerID)
 		return err
 	}
+
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
 
 	requester := pool.requesters[block.Height]
 	if requester == nil {
@@ -347,9 +355,23 @@ func (pool *BlockPool) SetPeerRange(peerID p2p.ID, base int64, height int64) {
 
 	peer := pool.peers[peerID]
 	if peer != nil {
+		if base < peer.base || height < peer.height {
+			pool.Logger.Info("Peer is reporting height/base that is lower than what it previously reported",
+				"peer", peerID,
+				"height", height, "base", base,
+				"prevHeight", peer.height, "prevBase", peer.base)
+			// RemovePeer will redo all requesters associated with this peer.
+			pool.removePeer(peerID)
+			pool.banPeer(peerID)
+			return
+		}
 		peer.base = base
 		peer.height = height
 	} else {
+		if pool.isPeerBanned(peerID) {
+			pool.Logger.Debug("Ignoring banned peer", "peer", peerID)
+			return
+		}
 		peer = newBPPeer(pool, peerID, base, height)
 		peer.setLogger(pool.Logger.With("peer", peerID))
 		pool.peers[peerID] = peer
@@ -372,6 +394,7 @@ func (pool *BlockPool) RemovePeer(peerID p2p.ID) {
 	pool.removePeer(peerID)
 }
 
+// CONTRACT: pool.mtx must be locked.
 func (pool *BlockPool) removePeer(peerID p2p.ID) {
 	for _, requester := range pool.requesters {
 		if requester.didRequestFrom(peerID) {
@@ -410,6 +433,24 @@ func (pool *BlockPool) updateMaxPeerHeight() {
 		}
 	}
 	pool.maxPeerHeight = max
+}
+
+// IsPeerBanned returns true if the peer is banned.
+func (pool *BlockPool) IsPeerBanned(peerID p2p.ID) bool {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	return pool.isPeerBanned(peerID)
+}
+
+// CONTRACT: pool.mtx must be locked.
+func (pool *BlockPool) isPeerBanned(peerID p2p.ID) bool {
+	return cmttime.Since(pool.bannedPeers[peerID]) < time.Second*60
+}
+
+// CONTRACT: pool.mtx must be locked.
+func (pool *BlockPool) banPeer(peerID p2p.ID) {
+	pool.Logger.Debug("Banning peer", "id", peerID)
+	pool.bannedPeers[peerID] = cmttime.Now()
 }
 
 // Pick an available peer with the given height available.
@@ -459,6 +500,7 @@ func (pool *BlockPool) makeNextRequester(nextHeight int64) {
 	}
 }
 
+// thread-safe.
 func (pool *BlockPool) sendRequest(height int64, peerID p2p.ID) {
 	if !pool.IsRunning() {
 		return
@@ -466,6 +508,7 @@ func (pool *BlockPool) sendRequest(height int64, peerID p2p.ID) {
 	pool.requestsCh <- BlockRequest{height, peerID}
 }
 
+// thread-safe.
 func (pool *BlockPool) sendError(err error, peerID p2p.ID) {
 	if !pool.IsRunning() {
 		return
@@ -824,9 +867,7 @@ OUTER_LOOP:
 					// If the second peer was just set, reset the retryTimer to give the
 					// second peer a chance to respond.
 					if picked := bpr.pickSecondPeerAndSendRequest(); picked {
-						if !retryTimer.Stop() { //nolint:revive // suppress max-control-nesting linter
-							<-retryTimer.C
-						}
+						_ = retryTimer.Stop()
 						retryTimer.Reset(requestRetrySeconds * time.Second)
 					}
 				}

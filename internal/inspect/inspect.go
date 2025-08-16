@@ -3,25 +3,27 @@ package inspect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/internal/inspect/rpc"
-	cmtstrings "github.com/cometbft/cometbft/internal/strings"
-	"github.com/cometbft/cometbft/libs/log"
-	rpccore "github.com/cometbft/cometbft/rpc/core"
-	"github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/state/indexer"
-	"github.com/cometbft/cometbft/state/indexer/block"
-	"github.com/cometbft/cometbft/state/txindex"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
+	"github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/internal/inspect/rpc"
+	cmtstrings "github.com/cometbft/cometbft/v2/internal/strings"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	rpccore "github.com/cometbft/cometbft/v2/rpc/core"
+	"github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/state/indexer"
+	"github.com/cometbft/cometbft/v2/state/indexer/block"
+	"github.com/cometbft/cometbft/v2/state/txindex"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
-var logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+var logger = log.NewLogger(os.Stdout)
 
 // Inspector manages an RPC service that exports methods to debug a failed node.
 // After a node shuts down due to a consensus failure, it will no longer start
@@ -38,8 +40,9 @@ type Inspector struct {
 
 	// References to the state store and block store are maintained to enable
 	// the Inspector to safely close them on shutdown.
-	ss state.Store
-	bs state.BlockStore
+	ss    state.Store
+	bs    state.BlockStore
+	txIdx txindex.TxIndexer
 }
 
 // New returns an Inspector that serves RPC on the specified BlockStore and StateStore.
@@ -64,6 +67,7 @@ func New(
 		logger: logger,
 		ss:     ss,
 		bs:     bs,
+		txIdx:  txidx,
 	}
 }
 
@@ -93,16 +97,43 @@ func NewFromConfig(cfg *config.Config) (*Inspector, error) {
 // Run starts the Inspector servers and blocks until the servers shut down. The passed
 // in context is used to control the lifecycle of the servers.
 func (ins *Inspector) Run(ctx context.Context) error {
-	defer ins.bs.Close()
-	defer ins.ss.Close()
+	defer ins.Close()
 
 	return startRPCServers(ctx, ins.config, ins.logger, ins.routes)
 }
 
-func startRPCServers(ctx context.Context, cfg *config.RPCConfig, logger log.Logger, routes rpccore.RoutesMap) error {
-	g, tctx := errgroup.WithContext(ctx)
-	listenAddrs := cmtstrings.SplitAndTrimEmpty(cfg.ListenAddress, ",", " ")
-	rh := rpc.Handler(cfg, routes, logger)
+// Close closes all of the databases that the Inspector uses.
+func (ins *Inspector) Close() error {
+	errs := make([]string, 0, 3)
+
+	if err := ins.txIdx.Close(); err != nil {
+		errs = append(errs, "txIdx: "+err.Error())
+	}
+	if err := ins.ss.Close(); err != nil {
+		errs = append(errs, "ss: "+err.Error())
+	}
+	if err := ins.bs.Close(); err != nil {
+		errs = append(errs, "bs: "+err.Error())
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("closing inspector's databases: %s", strings.Join(errs, "; "))
+}
+
+func startRPCServers(
+	ctx context.Context,
+	cfg *config.RPCConfig,
+	logger log.Logger,
+	routes rpccore.RoutesMap,
+) error {
+	var (
+		g, tctx     = errgroup.WithContext(ctx)
+		listenAddrs = cmtstrings.SplitAndTrimEmpty(cfg.ListenAddress, ",", " ")
+		rh          = rpc.Handler(cfg, routes, logger)
+	)
 	for _, listenerAddr := range listenAddrs {
 		server := rpc.Server{
 			Logger:  logger,
@@ -111,16 +142,24 @@ func startRPCServers(ctx context.Context, cfg *config.RPCConfig, logger log.Logg
 			Addr:    listenerAddr,
 		}
 		if cfg.IsTLSEnabled() {
-			keyFile := cfg.KeyFile()
-			certFile := cfg.CertFile()
-			listenerAddr := listenerAddr
+			var (
+				keyFile      = cfg.KeyFile()
+				certFile     = cfg.CertFile()
+				listenerAddr = listenerAddr
+			)
 			g.Go(func() error {
-				logger.Info("RPC HTTPS server starting", "address", listenerAddr,
-					"certfile", certFile, "keyfile", keyFile)
+				logger.Info(
+					"RPC HTTPS server starting",
+					"address", listenerAddr,
+					"certfile", certFile,
+					"keyfile", keyFile,
+				)
+
 				err := server.ListenAndServeTLS(tctx, certFile, keyFile)
 				if !errors.Is(err, net.ErrClosed) {
 					return err
 				}
+
 				logger.Info("RPC HTTPS server stopped", "address", listenerAddr)
 				return nil
 			})
@@ -128,10 +167,12 @@ func startRPCServers(ctx context.Context, cfg *config.RPCConfig, logger log.Logg
 			listenerAddr := listenerAddr
 			g.Go(func() error {
 				logger.Info("RPC HTTP server starting", "address", listenerAddr)
+
 				err := server.ListenAndServe(tctx)
 				if !errors.Is(err, net.ErrClosed) {
 					return err
 				}
+
 				logger.Info("RPC HTTP server stopped", "address", listenerAddr)
 				return nil
 			})

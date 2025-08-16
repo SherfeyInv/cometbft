@@ -10,17 +10,17 @@ import (
 	"github.com/cosmos/gogoproto/proto"
 	gogotypes "github.com/cosmos/gogoproto/types"
 
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
 	cmtversion "github.com/cometbft/cometbft/api/cometbft/version/v1"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/crypto/tmhash"
-	"github.com/cometbft/cometbft/internal/bits"
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
-	cmtmath "github.com/cometbft/cometbft/libs/math"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	cmttime "github.com/cometbft/cometbft/types/time"
-	"github.com/cometbft/cometbft/version"
+	"github.com/cometbft/cometbft/v2/crypto"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/crypto/tmhash"
+	"github.com/cometbft/cometbft/v2/internal/bits"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
+	cmtmath "github.com/cometbft/cometbft/v2/libs/math"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
 const (
@@ -327,7 +327,7 @@ func MaxDataBytesNoEvidence(maxBytes int64, valsCount int) int64 {
 // NOTE: changes to the Header should be duplicated in:
 // - header.Hash()
 // - abci.Header
-// - https://github.com/cometbft/cometbft/blob/main/spec/blockchain/blockchain.md
+// - https://github.com/cometbft/cometbft/v2/blob/main/spec/blockchain/blockchain.md
 type Header struct {
 	// basic block info
 	Version cmtversion.Consensus `json:"version"`
@@ -561,7 +561,6 @@ func HeaderFromProto(ph *cmtproto.Header) (Header, error) {
 	h.ChainID = ph.ChainID
 	h.Height = ph.Height
 	h.Time = ph.Time
-	h.Height = ph.Height
 	h.LastBlockID = *bi
 	h.ValidatorsHash = ph.ValidatorsHash
 	h.NextValidatorsHash = ph.NextValidatorsHash
@@ -593,9 +592,14 @@ const (
 const (
 	// Max size of commit without any commitSigs -> 82 for BlockID, 8 for Height, 4 for Round.
 	MaxCommitOverheadBytes int64 = 94
-	// Commit sig size is made up of 96 bytes for the signature, 20 bytes for the address,
-	// 1 byte for the flag and 14 bytes for the timestamp.
-	MaxCommitSigBytes int64 = 131 + 10 // where's the 10 from?
+
+	// 4 bytes for field tags + 1 byte for signature LEN + 1 byte for
+	// validator address LEN + 1 byte for timestamp LEN.
+	maxCommitSigProtoEncOverhead = 4 + 1 + 1 + 1 + 3 // 3 ???
+	// Commit sig size is made up of MaxSignatureSize (96) bytes for the
+	// signature, 20 bytes for the address, 1 byte for the flag and 14 bytes for
+	// the timestamp.
+	MaxCommitSigBytes = 131 + maxCommitSigProtoEncOverhead
 )
 
 // CommitSig is a part of the Vote included in a Commit.
@@ -607,10 +611,10 @@ type CommitSig struct {
 }
 
 func MaxCommitBytes(valCount int) int64 {
-	// protoEncodingOverhead represents the overhead in bytes when encoding a protocol buffer message.
-	const protoEncodingOverhead int64 = 3
+	// 1 byte field tag + 1 byte LEN + 1 byte ???
+	const protoRepeatedFieldLenOverhead int64 = 3
 	// From the repeated commit sig field
-	return MaxCommitOverheadBytes + ((MaxCommitSigBytes + protoEncodingOverhead) * int64(valCount))
+	return MaxCommitOverheadBytes + ((MaxCommitSigBytes + protoRepeatedFieldLenOverhead) * int64(valCount))
 }
 
 // NewCommitSigAbsent returns new CommitSig with BlockIDFlagAbsent. Other
@@ -720,11 +724,15 @@ func (cs *CommitSig) FromProto(csp cmtproto.CommitSig) error {
 // -------------------------------------
 
 // ExtendedCommitSig contains a commit signature along with its corresponding
-// vote extension and vote extension signature.
+// vote extension and vote extension signature, where:
+// - `ExtensionSignature` is the signature of the replay-protected vote extension `Extension`.
+// - `NonRpExtensionSignature` is the signature of the non-replay-protected vote extension `NonRpExtension`.
 type ExtendedCommitSig struct {
-	CommitSig                 // Commit signature
-	Extension          []byte // Vote extension
-	ExtensionSignature []byte // Vote extension signature
+	CommitSig                      // Commit signature
+	Extension               []byte // Vote extension
+	ExtensionSignature      []byte // Vote extension signature
+	NonRpExtension          []byte // Non-replay-protected vote extension
+	NonRpExtensionSignature []byte // Non-replay-protected vote extension signature
 }
 
 // NewExtendedCommitSigAbsent returns new ExtendedCommitSig with
@@ -737,12 +745,16 @@ func NewExtendedCommitSigAbsent() ExtendedCommitSig {
 //
 // 1. commit sig
 // 2. first 6 bytes of vote extension
-// 3. first 6 bytes of vote extension signature.
+// 3. first 6 bytes of vote extension signature
+// 4. first 6 bytes of non-replay-protected vote extension
+// 5. first 6 bytes of non-replay-protected vote extension signature.
 func (ecs ExtendedCommitSig) String() string {
-	return fmt.Sprintf("ExtendedCommitSig{%s with %X %X}",
+	return fmt.Sprintf("ExtendedCommitSig{%s with %X %X %X %X}",
 		ecs.CommitSig,
 		cmtbytes.Fingerprint(ecs.Extension),
 		cmtbytes.Fingerprint(ecs.ExtensionSignature),
+		cmtbytes.Fingerprint(ecs.NonRpExtension),
+		cmtbytes.Fingerprint(ecs.NonRpExtensionSignature),
 	)
 }
 
@@ -753,17 +765,23 @@ func (ecs ExtendedCommitSig) ValidateBasic() error {
 	}
 
 	if ecs.BlockIDFlag == BlockIDFlagCommit {
-		if len(ecs.Extension) > MaxVoteExtensionSize {
+		if len(ecs.Extension)+len(ecs.NonRpExtension) > MaxVoteExtensionSize {
 			return fmt.Errorf("vote extension is too big (max: %d)", MaxVoteExtensionSize)
 		}
 		if len(ecs.ExtensionSignature) > MaxSignatureSize {
 			return fmt.Errorf("vote extension signature is too big (max: %d)", MaxSignatureSize)
+		}
+		if len(ecs.NonRpExtensionSignature) > MaxSignatureSize {
+			return fmt.Errorf("non-replay-protected vote extension signature is too big (max: %d)", MaxSignatureSize)
 		}
 		return nil
 	}
 
 	if len(ecs.ExtensionSignature) == 0 && len(ecs.Extension) != 0 {
 		return errors.New("vote extension signature absent on vote with extension")
+	}
+	if len(ecs.NonRpExtensionSignature) == 0 && len(ecs.NonRpExtension) != 0 {
+		return errors.New("vote extension signature absent on vote with non-replay-protected extension")
 	}
 	return nil
 }
@@ -772,32 +790,34 @@ func (ecs ExtendedCommitSig) ValidateBasic() error {
 // this ExtendedCommitSig.
 func (ecs ExtendedCommitSig) EnsureExtension(extEnabled bool) error {
 	if extEnabled {
-		if ecs.BlockIDFlag == BlockIDFlagCommit && len(ecs.ExtensionSignature) == 0 {
+		if ecs.BlockIDFlag == BlockIDFlagCommit &&
+			(len(ecs.ExtensionSignature) == 0 || len(ecs.NonRpExtensionSignature) == 0) {
 			return fmt.Errorf("vote extension signature is missing; validator addr %s, timestamp %v",
 				ecs.ValidatorAddress.String(),
 				ecs.Timestamp,
 			)
 		}
-		if ecs.BlockIDFlag != BlockIDFlagCommit && len(ecs.Extension) != 0 {
+		if ecs.BlockIDFlag != BlockIDFlagCommit && (len(ecs.Extension) != 0 || len(ecs.NonRpExtension) != 0) {
 			return fmt.Errorf("non-commit vote extension present; validator addr %s, timestamp %v",
 				ecs.ValidatorAddress.String(),
 				ecs.Timestamp,
 			)
 		}
-		if ecs.BlockIDFlag != BlockIDFlagCommit && len(ecs.ExtensionSignature) != 0 {
+		if ecs.BlockIDFlag != BlockIDFlagCommit &&
+			(len(ecs.ExtensionSignature) != 0 || len(ecs.NonRpExtensionSignature) != 0) {
 			return fmt.Errorf("non-commit vote extension signature present; validator addr %s, timestamp %v",
 				ecs.ValidatorAddress.String(),
 				ecs.Timestamp,
 			)
 		}
 	} else {
-		if len(ecs.Extension) != 0 {
+		if len(ecs.Extension) != 0 || len(ecs.NonRpExtension) != 0 {
 			return fmt.Errorf("vote extension present but extensions disabled; validator addr %s, timestamp %v",
 				ecs.ValidatorAddress.String(),
 				ecs.Timestamp,
 			)
 		}
-		if len(ecs.ExtensionSignature) != 0 {
+		if len(ecs.ExtensionSignature) != 0 || len(ecs.NonRpExtensionSignature) != 0 {
 			return fmt.Errorf("vote extension signature present but extensions disabled; validator addr %s, timestamp %v",
 				ecs.ValidatorAddress.String(),
 				ecs.Timestamp,
@@ -814,12 +834,14 @@ func (ecs *ExtendedCommitSig) ToProto() *cmtproto.ExtendedCommitSig {
 	}
 
 	return &cmtproto.ExtendedCommitSig{
-		BlockIdFlag:        cmtproto.BlockIDFlag(ecs.BlockIDFlag),
-		ValidatorAddress:   ecs.ValidatorAddress,
-		Timestamp:          ecs.Timestamp,
-		Signature:          ecs.Signature,
-		Extension:          ecs.Extension,
-		ExtensionSignature: ecs.ExtensionSignature,
+		BlockIdFlag:             cmtproto.BlockIDFlag(ecs.BlockIDFlag),
+		ValidatorAddress:        ecs.ValidatorAddress,
+		Timestamp:               ecs.Timestamp,
+		Signature:               ecs.Signature,
+		Extension:               ecs.Extension,
+		ExtensionSignature:      ecs.ExtensionSignature,
+		NonRpExtension:          ecs.NonRpExtension,
+		NonRpExtensionSignature: ecs.NonRpExtensionSignature,
 	}
 }
 
@@ -833,6 +855,8 @@ func (ecs *ExtendedCommitSig) FromProto(ecsp cmtproto.ExtendedCommitSig) error {
 	ecs.Signature = ecsp.Signature
 	ecs.Extension = ecsp.Extension
 	ecs.ExtensionSignature = ecsp.ExtensionSignature
+	ecs.NonRpExtension = ecsp.NonRpExtension
+	ecs.NonRpExtensionSignature = ecsp.NonRpExtensionSignature
 
 	return ecs.ValidateBasic()
 }
@@ -874,7 +898,7 @@ func (commit *Commit) Clone() *Commit {
 func (commit *Commit) GetVote(valIdx int32) *Vote {
 	commitSig := commit.Signatures[valIdx]
 	return &Vote{
-		Type:             PrecommitType,
+		Type:             cmtproto.PrecommitType,
 		Height:           commit.Height,
 		Round:            commit.Round,
 		BlockID:          commitSig.BlockID(commit.BlockID),
@@ -940,7 +964,7 @@ func (commit *Commit) ValidateBasic() error {
 // The BFT Time algorithm ensures that the computed median time is always picked among
 // the timestamps produced by honest processes, i.e., faulty processes cannot arbitrarily
 // increase or decrease the median time.
-// See: https://github.com/cometbft/cometbft/blob/main/spec/consensus/bft-time.md
+// See: https://github.com/cometbft/cometbft/v2/blob/main/spec/consensus/bft-time.md
 func (commit *Commit) MedianTime(validators *ValidatorSet) time.Time {
 	weightedTimes := make([]*cmttime.WeightedTime, len(commit.Signatures))
 	totalVotingPower := int64(0)
@@ -1176,16 +1200,18 @@ func (ec *ExtendedCommit) ToCommit() *Commit {
 func (ec *ExtendedCommit) GetExtendedVote(valIndex int32) *Vote {
 	ecs := ec.ExtendedSignatures[valIndex]
 	return &Vote{
-		Type:               PrecommitType,
-		Height:             ec.Height,
-		Round:              ec.Round,
-		BlockID:            ecs.BlockID(ec.BlockID),
-		Timestamp:          ecs.Timestamp,
-		ValidatorAddress:   ecs.ValidatorAddress,
-		ValidatorIndex:     valIndex,
-		Signature:          ecs.Signature,
-		Extension:          ecs.Extension,
-		ExtensionSignature: ecs.ExtensionSignature,
+		Type:                    PrecommitType,
+		Height:                  ec.Height,
+		Round:                   ec.Round,
+		BlockID:                 ecs.BlockID(ec.BlockID),
+		Timestamp:               ecs.Timestamp,
+		ValidatorAddress:        ecs.ValidatorAddress,
+		ValidatorIndex:          valIndex,
+		Signature:               ecs.Signature,
+		Extension:               ecs.Extension,
+		ExtensionSignature:      ecs.ExtensionSignature,
+		NonRpExtension:          ecs.NonRpExtension,
+		NonRpExtensionSignature: ecs.NonRpExtensionSignature,
 	}
 }
 
@@ -1436,7 +1462,7 @@ func (data *EvidenceData) StringIndented(indent string) string {
 			evStrings[i] = fmt.Sprintf("... (%v total)", len(data.Evidence))
 			break
 		}
-		evStrings[i] = fmt.Sprintf("Evidence:%v", ev)
+		evStrings[i] = "Evidence:" + ev.String()
 	}
 	return fmt.Sprintf(`EvidenceData{
 %s  %v

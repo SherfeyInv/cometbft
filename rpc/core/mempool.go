@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	ctypes "github.com/cometbft/cometbft/rpc/core/types"
-	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	ctypes "github.com/cometbft/cometbft/v2/rpc/core/types"
+	rpctypes "github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 var (
@@ -26,9 +26,12 @@ func (env *Environment) BroadcastTxAsync(_ *rpctypes.Context, tx types.Tx) (*cty
 	if env.MempoolReactor.WaitSync() {
 		return nil, ErrEndpointClosedCatchingUp
 	}
-	_, err := env.Mempool.CheckTx(tx, "")
+	reqRes, err := env.MempoolReactor.TryAddTx(tx, nil)
 	if err != nil {
 		return nil, err
+	}
+	if reqRes.Error() != nil {
+		return nil, reqRes.Error()
 	}
 	return &ctypes.ResultBroadcastTx{Hash: tx.Hash()}, nil
 }
@@ -42,7 +45,8 @@ func (env *Environment) BroadcastTxSync(ctx *rpctypes.Context, tx types.Tx) (*ct
 	}
 
 	resCh := make(chan *abci.CheckTxResponse, 1)
-	reqRes, err := env.Mempool.CheckTx(tx, "")
+	resErrCh := make(chan error, 1)
+	reqRes, err := env.MempoolReactor.TryAddTx(tx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -53,13 +57,19 @@ func (env *Environment) BroadcastTxSync(ctx *rpctypes.Context, tx types.Tx) (*ct
 		select {
 		case <-ctx.Context().Done():
 		default:
-			resCh <- reqRes.Response.GetCheckTx()
+			if reqRes.Error() != nil {
+				resErrCh <- reqRes.Error()
+			} else {
+				resCh <- reqRes.Response.GetCheckTx()
+			}
 		}
 	}()
 
 	select {
 	case <-ctx.Context().Done():
 		return nil, ErrTxBroadcast{Source: ctx.Context().Err(), ErrReason: ErrConfirmationNotReceived}
+	case err := <-resErrCh:
+		return nil, ErrTxBroadcast{Source: ErrCheckTxFailed, ErrReason: err}
 	case res := <-resCh:
 		return &ctypes.ResultBroadcastTx{
 			Code:      res.Code,
@@ -104,7 +114,8 @@ func (env *Environment) BroadcastTxCommit(ctx *rpctypes.Context, tx types.Tx) (*
 
 	// Broadcast tx and wait for CheckTx result
 	checkTxResCh := make(chan *abci.CheckTxResponse, 1)
-	reqRes, err := env.Mempool.CheckTx(tx, "")
+	resErrCh := make(chan error, 1)
+	reqRes, err := env.MempoolReactor.TryAddTx(tx, nil)
 	if err != nil {
 		env.Logger.Error("Error on broadcastTxCommit", "err", err)
 		return nil, ErrTxBroadcast{Source: err, ErrReason: ErrCheckTxFailed}
@@ -116,13 +127,19 @@ func (env *Environment) BroadcastTxCommit(ctx *rpctypes.Context, tx types.Tx) (*
 		select {
 		case <-ctx.Context().Done():
 		default:
-			checkTxResCh <- reqRes.Response.GetCheckTx()
+			if reqRes.Error() != nil {
+				resErrCh <- reqRes.Error()
+			} else {
+				checkTxResCh <- reqRes.Response.GetCheckTx()
+			}
 		}
 	}()
 
 	select {
 	case <-ctx.Context().Done():
 		return nil, ErrTxBroadcast{Source: ctx.Context().Err(), ErrReason: ErrConfirmationNotReceived}
+	case err := <-resErrCh:
+		return nil, ErrTxBroadcast{Source: ErrCheckTxFailed, ErrReason: err}
 	case checkTxRes := <-checkTxResCh:
 		if checkTxRes.Code != abci.CodeTypeOK {
 			return &ctypes.ResultBroadcastTxCommit{

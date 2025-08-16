@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	abci "github.com/cometbft/cometbft/abci/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
 )
 
 const (
@@ -115,7 +115,12 @@ func (s *SnapshotStore) Prune(n int) error {
 	i := 0
 	for ; i < len(s.metadata)-n; i++ {
 		h := s.metadata[i].Height
-		if err := os.Remove(filepath.Join(s.dir, fmt.Sprintf("%v.json", h))); err != nil {
+		filePath := filepath.Join(s.dir, fmt.Sprintf("%v.json", h))
+		if err := os.Remove(filePath); err != nil {
+			// Trying to prune a non-existent snapshot?
+			if os.IsNotExist(err) {
+				continue
+			}
 			return err
 		}
 	}

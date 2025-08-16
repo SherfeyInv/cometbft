@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -16,31 +17,36 @@ import (
 
 	_ "net/http/pprof" //nolint: gosec
 
-	cfg "github.com/cometbft/cometbft/config"
-	bc "github.com/cometbft/cometbft/internal/blocksync"
-	cs "github.com/cometbft/cometbft/internal/consensus"
-	"github.com/cometbft/cometbft/internal/evidence"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
-	"github.com/cometbft/cometbft/libs/service"
-	"github.com/cometbft/cometbft/light"
-	mempl "github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/p2p"
-	"github.com/cometbft/cometbft/p2p/pex"
-	"github.com/cometbft/cometbft/proxy"
-	rpccore "github.com/cometbft/cometbft/rpc/core"
-	grpcserver "github.com/cometbft/cometbft/rpc/grpc/server"
-	grpcprivserver "github.com/cometbft/cometbft/rpc/grpc/server/privileged"
-	rpcserver "github.com/cometbft/cometbft/rpc/jsonrpc/server"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/state/indexer"
-	"github.com/cometbft/cometbft/state/txindex"
-	"github.com/cometbft/cometbft/state/txindex/null"
-	"github.com/cometbft/cometbft/statesync"
-	"github.com/cometbft/cometbft/store"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
-	"github.com/cometbft/cometbft/version"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	abcitypes "github.com/cometbft/cometbft/v2/abci/types"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	bc "github.com/cometbft/cometbft/v2/internal/blocksync"
+	cs "github.com/cometbft/cometbft/v2/internal/consensus"
+	"github.com/cometbft/cometbft/v2/internal/evidence"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtpubsub "github.com/cometbft/cometbft/v2/libs/pubsub"
+	"github.com/cometbft/cometbft/v2/libs/service"
+	"github.com/cometbft/cometbft/v2/light"
+	mempl "github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/p2p"
+	na "github.com/cometbft/cometbft/v2/p2p/netaddr"
+	"github.com/cometbft/cometbft/v2/p2p/pex"
+	"github.com/cometbft/cometbft/v2/p2p/transport/tcp"
+	"github.com/cometbft/cometbft/v2/proxy"
+	rpccore "github.com/cometbft/cometbft/v2/rpc/core"
+	grpcserver "github.com/cometbft/cometbft/v2/rpc/grpc/server"
+	grpcprivserver "github.com/cometbft/cometbft/v2/rpc/grpc/server/privileged"
+	rpcserver "github.com/cometbft/cometbft/v2/rpc/jsonrpc/server"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/state/indexer"
+	"github.com/cometbft/cometbft/v2/state/txindex"
+	"github.com/cometbft/cometbft/v2/state/txindex/null"
+	"github.com/cometbft/cometbft/v2/statesync"
+	"github.com/cometbft/cometbft/v2/store"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
+	"github.com/cometbft/cometbft/v2/version"
 )
 
 // Node is the highest level interface to a full CometBFT node.
@@ -50,11 +56,11 @@ type Node struct {
 
 	// config
 	config        *cfg.Config
-	genesisDoc    *types.GenesisDoc   // initial validator set
+	genesisTime   time.Time
 	privValidator types.PrivValidator // local node's validator key
 
 	// network
-	transport   *p2p.MultiplexTransport
+	transport   *tcp.MultiplexTransport
 	sw          *p2p.Switch  // p2p connections
 	addrBook    pex.AddrBook // known peers
 	nodeInfo    p2p.NodeInfo
@@ -62,34 +68,43 @@ type Node struct {
 	isListening bool
 
 	// services
-	eventBus          *types.EventBus // pub/sub for services
-	stateStore        sm.Store
-	blockStore        *store.BlockStore // store the blockchain to disk
-	pruner            *sm.Pruner
-	bcReactor         p2p.Reactor        // for block-syncing
-	mempoolReactor    waitSyncP2PReactor // for gossipping transactions
-	mempool           mempl.Mempool
-	stateSync         bool                    // whether the node should state sync on startup
-	stateSyncReactor  *statesync.Reactor      // for hosting and restoring state sync snapshots
+	eventBus         *types.EventBus // pub/sub for services
+	stateStore       sm.Store
+	blockStore       *store.BlockStore // store the blockchain to disk
+	pruner           *sm.Pruner
+	bcReactor        p2p.Reactor    // for block-syncing
+	mempoolReactor   mempoolReactor // for gossipping transactions
+	mempool          mempl.Mempool
+	consensusState   *cs.State      // latest consensus state
+	consensusReactor *cs.Reactor    // for participating in the consensus
+	pexReactor       *pex.Reactor   // for exchanging peer addresses
+	evidencePool     *evidence.Pool // tracking evidence
+	proxyApp         proxy.AppConns // connection to the application
+	rpcListeners     []net.Listener // rpc servers
+	txIndexer        txindex.TxIndexer
+	blockIndexer     indexer.BlockIndexer
+	indexerService   *txindex.IndexerService
+	prometheusSrv    *http.Server
+	pprofSrv         *http.Server
+
+	// statesync
+	stateSync         bool                    // whether the node should statesync on startup
+	stateSyncReactor  *statesync.Reactor      // for hosting and restoring statesync snapshots
 	stateSyncProvider statesync.StateProvider // provides state data for bootstrapping a node
-	stateSyncGenesis  sm.State                // provides the genesis state for state sync
-	consensusState    *cs.State               // latest consensus state
-	consensusReactor  *cs.Reactor             // for participating in the consensus
-	pexReactor        *pex.Reactor            // for exchanging peer addresses
-	evidencePool      *evidence.Pool          // tracking evidence
-	proxyApp          proxy.AppConns          // connection to the application
-	rpcListeners      []net.Listener          // rpc servers
-	txIndexer         txindex.TxIndexer
-	blockIndexer      indexer.BlockIndexer
-	indexerService    *txindex.IndexerService
-	prometheusSrv     *http.Server
-	pprofSrv          *http.Server
+	stateSyncState    sm.State                // provides the genesis state for statesync
+	stateSyncGenDoc   *types.GenesisDoc       // store genesis doc until the statesync is over.
+	appInfoResponse   *abcitypes.InfoResponse // if statesync fails, do the handshake and proceed with blocksync.
 }
 
 type waitSyncP2PReactor interface {
 	p2p.Reactor
 	// required by RPC service
 	WaitSync() bool
+}
+
+type mempoolReactor interface {
+	waitSyncP2PReactor
+	TryAddTx(tx types.Tx, sender p2p.Peer) (*abcicli.ReqRes, error)
 }
 
 // Option sets a parameter for the node.
@@ -120,16 +135,15 @@ func CustomReactors(reactors map[string]p2p.Reactor) Option {
 			// NOTE: This is a bit messy now with the type casting but is
 			// cleaned up in the following version when NodeInfo is changed from
 			// and interface to a concrete type
-			if ni, ok := n.nodeInfo.(p2p.DefaultNodeInfo); ok {
-				for _, chDesc := range reactor.GetChannels() {
-					if !ni.HasChannel(chDesc.ID) {
-						ni.Channels = append(ni.Channels, chDesc.ID)
-						n.transport.AddChannel(chDesc.ID)
+			if ni, ok := n.nodeInfo.(p2p.NodeInfoDefault); ok {
+				for _, chDesc := range reactor.StreamDescriptors() {
+					if !ni.HasChannel(chDesc.StreamID()) {
+						ni.Channels = append(ni.Channels, chDesc.StreamID())
 					}
 				}
 				n.nodeInfo = ni
 			} else {
-				n.Logger.Error("Node info is not of type DefaultNodeInfo. Custom reactor channels can not be added.")
+				n.Logger.Error("Node info is not of type p2p.NodeInfoDefault. Custom reactor channels can not be added.")
 			}
 		}
 	}
@@ -150,7 +164,7 @@ func StateProvider(stateProvider statesync.StateProvider) Option {
 //
 // If the block store is not empty, the function returns an error.
 func BootstrapState(ctx context.Context, config *cfg.Config, dbProvider cfg.DBProvider, genProvider GenesisDocProvider, height uint64, appHash []byte) (err error) {
-	logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	logger := log.NewLogger(os.Stdout)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -207,7 +221,7 @@ func BootstrapState(ctx context.Context, config *cfg.Config, dbProvider cfg.DBPr
 	}
 
 	// The state store will use the DBKeyLayout set in config or already existing in the DB.
-	genState, _, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genProvider, config.Storage.GenesisHash)
+	genState, _, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genProvider, "")
 	if err != nil {
 		return err
 	}
@@ -281,12 +295,45 @@ func NewNode(ctx context.Context,
 	logger log.Logger,
 	options ...Option,
 ) (*Node, error) {
+	return NewNodeWithCliParams(ctx,
+		config,
+		privValidator,
+		nodeKey,
+		clientCreator,
+		genesisDocProvider,
+		dbProvider,
+		metricsProvider,
+		logger,
+		CliParams{},
+		options...)
+}
+
+// NewNodeWithCliParams returns a new, ready to go, CometBFT node
+// where we check the hash of the provided genesis file against
+// a hash provided by the operator via cli.
+
+func NewNodeWithCliParams(ctx context.Context,
+	config *cfg.Config,
+	privValidator types.PrivValidator,
+	nodeKey *p2p.NodeKey,
+	clientCreator proxy.ClientCreator,
+	genesisDocProvider GenesisDocProvider,
+	dbProvider cfg.DBProvider,
+	metricsProvider MetricsProvider,
+	logger log.Logger,
+	cliParams CliParams,
+	options ...Option,
+) (*Node, error) {
 	blockStoreDB, stateDB, err := initDBs(config, dbProvider)
 	if err != nil {
 		return nil, err
 	}
 
-	state, genDoc, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider, config.Storage.GenesisHash)
+	var genesisHash string
+	if len(cliParams.GenesisHash) != 0 {
+		genesisHash = hex.EncodeToString(cliParams.GenesisHash)
+	}
+	state, genDoc, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider, genesisHash)
 	if err != nil {
 		return nil, err
 	}
@@ -301,14 +348,14 @@ func NewNode(ctx context.Context,
 		DBKeyLayout:          config.Storage.ExperimentalKeyLayout,
 	})
 
-	blockStore := store.NewBlockStore(blockStoreDB, store.WithMetrics(bstMetrics), store.WithCompaction(config.Storage.Compact, config.Storage.CompactionInterval), store.WithDBKeyLayout(config.Storage.ExperimentalKeyLayout), store.WithDBKeyLayout(config.Storage.ExperimentalKeyLayout))
+	blockStore := store.NewBlockStore(blockStoreDB, store.WithMetrics(bstMetrics), store.WithCompaction(config.Storage.Compact, config.Storage.CompactionInterval), store.WithDBKeyLayout(config.Storage.ExperimentalKeyLayout))
 	logger.Info("Blockstore version", "version", blockStore.GetVersion())
 
 	// The key will be deleted if it existed.
 	// Not checking whether the key is there in case the genesis file was larger than
 	// the max size of a value (in rocksDB for example), which would cause the check
 	// to fail and prevent the node from booting.
-	logger.Info("WARNING: deleting genesis file from database if present, the database stores a hash of the original genesis file now")
+	logger.Warn("deleting genesis file from database if present, the database stores a hash of the original genesis file now")
 
 	err = stateDB.Delete(genesisDocKey)
 	if err != nil {
@@ -350,9 +397,10 @@ func NewNode(ctx context.Context,
 	if err != nil {
 		return nil, ErrGetPubKey{Err: err}
 	}
+	localAddr := pubKey.Address()
 
 	// Determine whether we should attempt state sync.
-	stateSync := config.StateSync.Enable && !onlyValidatorIsUs(state, pubKey)
+	stateSync := config.StateSync.Enable && !state.Validators.ValidatorBlocksTheChain(localAddr)
 	if stateSync && state.LastBlockHeight > 0 {
 		logger.Info("Found local state with non-zero height, skipping state sync")
 		stateSync = false
@@ -361,9 +409,15 @@ func NewNode(ctx context.Context,
 	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
 	// and replays any blocks as necessary to sync CometBFT with the app.
 	consensusLogger := logger.With("module", "consensus")
+
+	appInfoResponse, err := proxyApp.Query().Info(ctx, proxy.InfoRequest)
+	if err != nil {
+		return nil, fmt.Errorf("error calling ABCI Info method: %v", err)
+	}
+
 	if !stateSync {
-		if err := doHandshake(ctx, stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
-			return nil, err
+		if err := doHandshake(ctx, stateStore, state, blockStore, genDoc, eventBus, appInfoResponse, proxyApp, consensusLogger); err != nil {
+			return nil, ErrHandshake{Err: err}
 		}
 
 		// Reload the state. It will have the Version.Consensus.App set by the
@@ -375,14 +429,12 @@ func NewNode(ctx context.Context,
 		}
 	}
 
-	// Determine whether we should do block sync. This must happen after the handshake, since the
-	// app may modify the validator set, specifying ourself as the only validator.
-	blockSync := !onlyValidatorIsUs(state, pubKey)
-	waitSync := stateSync || blockSync
-
 	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
-	mempool, mempoolReactor := createMempoolAndMempoolReactor(config, proxyApp, state, waitSync, memplMetrics, logger)
+	// Blocksync is always active, except if the local node blocks the chain
+	waitSync := !state.Validators.ValidatorBlocksTheChain(localAddr)
+
+	mempool, mempoolReactor := createMempoolAndMempoolReactor(config, proxyApp, state, eventBus, waitSync, memplMetrics, logger, appInfoResponse)
 
 	evidenceReactor, evidencePool, err := createEvidenceReactor(config, dbProvider, stateStore, blockStore, logger)
 	if err != nil {
@@ -421,8 +473,9 @@ func NewNode(ctx context.Context,
 			panic(fmt.Sprintf("failed to retrieve statesynced height from store %s; expected state store height to be %v", err, state.LastBlockHeight))
 		}
 	}
-	// Don't start block sync if we're doing a state sync first.
-	bcReactor, err := createBlocksyncReactor(config, state, blockExec, blockStore, blockSync && !stateSync, logger, bsMetrics, offlineStateSyncHeight)
+	// Don't start block sync if we're doing a state sync first, or we are blocking the chain.
+	blockSync := !stateSync && !state.Validators.ValidatorBlocksTheChain(localAddr)
+	bcReactor, err := createBlocksyncReactor(config, state, blockExec, blockStore, blockSync, localAddr, logger, bsMetrics, offlineStateSyncHeight)
 	if err != nil {
 		return nil, ErrCreateBlockSyncReactor{Err: err}
 	}
@@ -453,9 +506,11 @@ func NewNode(ctx context.Context,
 		return nil, err
 	}
 
-	transport, peerFilters := createTransport(config, nodeInfo, nodeKey, proxyApp)
+	transport, peerFilters := createTransport(config, nodeKey, proxyApp)
 
 	p2pLogger := logger.With("module", "p2p")
+	transport.SetLogger(p2pLogger)
+
 	sw := createSwitch(
 		config, transport, p2pMetrics, peerFilters, mempoolReactor, bcReactor,
 		stateSyncReactor, consensusReactor, evidenceReactor, nodeInfo, nodeKey, p2pLogger,
@@ -482,7 +537,7 @@ func NewNode(ctx context.Context,
 	//
 	// We need to set Seeds and PersistentPeers on the switch,
 	// since it needs to be able to use these (and their DNS names)
-	// even if the PEX is off. We can include the DNS name in the NetAddress,
+	// even if the PEX is off. We can include the DNS name in the na.NetAddr,
 	// but it would still be nice to have a clear list of the current "PersistentPeers"
 	// somewhere that we can return with net_info.
 	//
@@ -498,7 +553,7 @@ func NewNode(ctx context.Context,
 
 	node := &Node{
 		config:        config,
-		genesisDoc:    genDoc,
+		genesisTime:   genDoc.GenesisTime,
 		privValidator: privValidator,
 
 		transport: transport,
@@ -515,9 +570,6 @@ func NewNode(ctx context.Context,
 		mempool:          mempool,
 		consensusState:   consensusState,
 		consensusReactor: consensusReactor,
-		stateSyncReactor: stateSyncReactor,
-		stateSync:        stateSync,
-		stateSyncGenesis: state, // Shouldn't be necessary, but need a way to pass the genesis state
 		pexReactor:       pexReactor,
 		evidencePool:     evidencePool,
 		proxyApp:         proxyApp,
@@ -525,6 +577,13 @@ func NewNode(ctx context.Context,
 		indexerService:   indexerService,
 		blockIndexer:     blockIndexer,
 		eventBus:         eventBus,
+
+		// statesync
+		stateSync:        stateSync,
+		stateSyncReactor: stateSyncReactor,
+		stateSyncState:   state,
+		stateSyncGenDoc:  genDoc,
+		appInfoResponse:  appInfoResponse,
 	}
 	node.BaseService = *service.NewBaseService(logger, "Node", node)
 
@@ -538,7 +597,7 @@ func NewNode(ctx context.Context,
 // OnStart starts the Node. It implements service.Service.
 func (n *Node) OnStart() error {
 	now := cmttime.Now()
-	genTime := n.genesisDoc.GenesisTime
+	genTime := n.genesisTime
 	if genTime.After(now) {
 		n.Logger.Info("Genesis time is in the future. Sleeping until then...", "genTime", genTime)
 		time.Sleep(genTime.Sub(now))
@@ -559,13 +618,13 @@ func (n *Node) OnStart() error {
 	if n.config.RPC.ListenAddress != "" {
 		listeners, err := n.startRPC()
 		if err != nil {
-			return err
+			return fmt.Errorf("starting RPC server: %w", err)
 		}
 		n.rpcListeners = listeners
 	}
 
 	// Start the transport.
-	addr, err := p2p.NewNetAddressString(p2p.IDAddressString(n.nodeKey.ID(), n.config.P2P.ListenAddress))
+	addr, err := na.NewFromString(na.IDAddrString(n.nodeKey.ID(), n.config.P2P.ListenAddress))
 	if err != nil {
 		return err
 	}
@@ -587,17 +646,66 @@ func (n *Node) OnStart() error {
 		return ErrDialPeers{Err: err}
 	}
 
-	// Run state sync
+	// Start statesync.
 	if n.stateSync {
 		bcR, ok := n.bcReactor.(blockSyncReactor)
 		if !ok {
 			return ErrSwitchStateSync
 		}
-		err := startStateSync(n.stateSyncReactor, bcR, n.stateSyncProvider,
-			n.config.StateSync, n.stateStore, n.blockStore, n.stateSyncGenesis, n.config.Storage.ExperimentalKeyLayout)
+
+		stateCh, errc, err := startStateSync(n.stateSyncReactor, n.stateSyncProvider,
+			n.config.StateSync, n.stateStore, n.blockStore, n.stateSyncState, n.config.Storage.ExperimentalKeyLayout)
 		if err != nil {
 			return ErrStartStateSync{Err: err}
 		}
+
+		// Wait until statesync is over or errors, and start blocksync in a separate goroutine.
+		go func() {
+			defer func() {
+				// FREE GENESIS DOC MEMORY!
+				n.stateSyncGenDoc = nil
+				n.appInfoResponse = nil
+			}()
+
+			select {
+			case <-n.Quit():
+				return
+			case newState := <-stateCh:
+				n.Logger.Info("statesync complete. switching to blocksync with new state")
+
+				err = bcR.SwitchToBlockSync(newState)
+				if err != nil {
+					n.Logger.Error("failed to switch to blocksync", "err", err)
+					return
+				}
+			case err := <-errc:
+				n.Logger.Warn("statesync failed. switching to blocksync with genesis state", "err", err)
+
+				const handshakeTimeout = 5 * time.Second
+				ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+				defer cancel()
+				if err := doHandshake(ctx, n.stateStore, n.stateSyncState, n.blockStore,
+					n.stateSyncGenDoc, n.eventBus, n.appInfoResponse, n.proxyApp, n.Logger); err != nil {
+					n.Logger.Error("failed to handshake with the app", "err", err)
+					return
+				}
+
+				// Reload the state. It will have the Version.Consensus.App set by the
+				// Handshake, and may have other modifications as well (ie. depending on
+				// what happened during block replay).
+				state, err := n.stateStore.Load()
+				if err != nil {
+					n.Logger.Error("failed to load state", "err", err)
+					return
+				}
+
+				err = bcR.SwitchToBlockSync(state)
+				if err != nil {
+					n.Logger.Error("failed to switch to blocksync", "err", err)
+					return
+				}
+			}
+		}()
 	}
 
 	// Start background pruning
@@ -682,13 +790,15 @@ func (n *Node) OnStop() {
 	}
 }
 
-// ConfigureRPC makes sure RPC has all the objects it needs to operate.
+// ConfigureRPC initializes and returns an `Environment` object with all the data
+// it needs to serve the RPC APIs.
 func (n *Node) ConfigureRPC() (*rpccore.Environment, error) {
 	pubKey, err := n.privValidator.GetPubKey()
 	if pubKey == nil || err != nil {
 		return nil, ErrGetPubKey{Err: err}
 	}
-	rpcCoreEnv := rpccore.Environment{
+
+	rpcEnv := &rpccore.Environment{
 		ProxyAppQuery:   n.proxyApp.Query(),
 		ProxyAppMempool: n.proxyApp.Mempool(),
 
@@ -700,7 +810,6 @@ func (n *Node) ConfigureRPC() (*rpccore.Environment, error) {
 		P2PTransport:   n,
 		PubKey:         pubKey,
 
-		GenDoc:           n.genesisDoc,
 		TxIndexer:        n.txIndexer,
 		BlockIndexer:     n.blockIndexer,
 		ConsensusReactor: n.consensusReactor,
@@ -711,17 +820,22 @@ func (n *Node) ConfigureRPC() (*rpccore.Environment, error) {
 		Logger: n.Logger.With("module", "rpc"),
 
 		Config: *n.config.RPC,
+
+		GenesisFilePath: n.config.GenesisFile(),
 	}
-	if err := rpcCoreEnv.InitGenesisChunks(); err != nil {
-		return nil, err
+
+	n.Logger.Info("Creating genesis file chunks if genesis file is too big...")
+	if err := rpcEnv.InitGenesisChunks(); err != nil {
+		return nil, fmt.Errorf("configuring RPC API environment: %w", err)
 	}
-	return &rpcCoreEnv, nil
+
+	return rpcEnv, nil
 }
 
 func (n *Node) startRPC() ([]net.Listener, error) {
 	env, err := n.ConfigureRPC()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("configuring RPC server: %s", err)
 	}
 
 	listenAddrs := splitAndTrimEmpty(n.config.RPC.ListenAddress, ",", " ")
@@ -782,25 +896,29 @@ func (n *Node) startRPC() ([]net.Listener, error) {
 		}
 		if n.config.RPC.IsTLSEnabled() {
 			go func() {
-				if err := rpcserver.ServeTLS(
+				err := rpcserver.ServeTLSWithShutdown(
 					listener,
 					rootHandler,
 					n.config.RPC.CertFile(),
 					n.config.RPC.KeyFile(),
 					rpcLogger,
 					config,
-				); err != nil {
-					n.Logger.Error("Error serving server with TLS", "err", err)
+					env.Cleanup,
+				)
+				if err != nil {
+					n.Logger.Error("serving server with TLS", "err", err)
 				}
 			}()
 		} else {
 			go func() {
-				if err := rpcserver.Serve(
+				err := rpcserver.ServeWithShutdown(
 					listener,
 					rootHandler,
 					rpcLogger,
 					config,
-				); err != nil {
+					env.Cleanup,
+				)
+				if err != nil {
 					n.Logger.Error("Error serving server", "err", err)
 				}
 			}()
@@ -940,9 +1058,31 @@ func (n *Node) PrivValidator() types.PrivValidator {
 	return n.privValidator
 }
 
-// GenesisDoc returns the Node's GenesisDoc.
-func (n *Node) GenesisDoc() *types.GenesisDoc {
-	return n.genesisDoc
+// GenesisDoc returns a GenesisDoc object after reading the genesis file from disk.
+// The function does not check for the genesis's validity since it was already
+// checked at startup, and we work under the assumption that correct nodes (i.e.,
+// non-Byzantine) are not compromised. Therefore, their file system can be
+// trusted while the node is running.
+// Note that the genesis file can be large (hundreds of MBs, even GBs); therefore,
+// we recommend that the caller does not keep the GenesisDoc returned by this
+// function in memory longer than necessary.
+func (n *Node) GenesisDoc() (*types.GenesisDoc, error) {
+	gDocPath := n.config.GenesisFile()
+
+	gDocJSON, err := os.ReadFile(gDocPath)
+	if err != nil {
+		return nil, fmt.Errorf("unavailable genesis file at %s: %w", gDocPath, err)
+	}
+
+	var gDoc types.GenesisDoc
+
+	err = cmtjson.Unmarshal(gDocJSON, &gDoc)
+	if err != nil {
+		formatStr := "invalid JSON format for genesis file at %s: %w"
+		return nil, fmt.Errorf(formatStr, gDocPath, err)
+	}
+
+	return &gDoc, nil
 }
 
 // ProxyApp returns the Node's AppConns, representing its connections to the ABCI application.
@@ -978,30 +1118,30 @@ func makeNodeInfo(
 	txIndexer txindex.TxIndexer,
 	genDoc *types.GenesisDoc,
 	state sm.State,
-) (p2p.DefaultNodeInfo, error) {
+) (p2p.NodeInfoDefault, error) {
 	txIndexerStatus := "on"
 	if _, ok := txIndexer.(*null.TxIndex); ok {
 		txIndexerStatus = "off"
 	}
 
-	nodeInfo := p2p.DefaultNodeInfo{
-		ProtocolVersion: p2p.NewProtocolVersion(
-			version.P2PProtocol, // global
-			state.Version.Consensus.Block,
-			state.Version.Consensus.App,
-		),
+	nodeInfo := p2p.NodeInfoDefault{
+		ProtocolVersion: p2p.ProtocolVersion{
+			P2P:   version.P2PProtocol, // global
+			Block: state.Version.Consensus.Block,
+			App:   state.Version.Consensus.App,
+		},
 		DefaultNodeID: nodeKey.ID(),
 		Network:       genDoc.ChainID,
 		Version:       version.CMTSemVer,
 		Channels: []byte{
 			bc.BlocksyncChannel,
 			cs.StateChannel, cs.DataChannel, cs.VoteChannel, cs.VoteSetBitsChannel,
-			mempl.MempoolChannel,
+			mempl.MempoolChannel, mempl.MempoolControlChannel,
 			evidence.EvidenceChannel,
 			statesync.SnapshotChannel, statesync.ChunkChannel,
 		},
 		Moniker: config.Moniker,
-		Other: p2p.DefaultNodeInfoOther{
+		Other: p2p.NodeInfoDefaultOther{
 			TxIndex:    txIndexerStatus,
 			RPCAddress: config.RPC.ListenAddress,
 		},

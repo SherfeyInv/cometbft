@@ -1,7 +1,7 @@
 // Note that no auto-generated gRPC code is directly exposed via the client
 // interface. This is on purpose to minimize the potential impact on users of
 // switching to Google's Go code generator in future. See
-// https://github.com/cometbft/cometbft/issues/731 for more details.
+// https://github.com/cometbft/cometbft/v2/issues/731 for more details.
 package client
 
 import (
@@ -11,7 +11,7 @@ import (
 	ggrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	cmtnet "github.com/cometbft/cometbft/internal/net"
+	cmtnet "github.com/cometbft/cometbft/v2/internal/net"
 )
 
 type Option func(*clientBuilder)
@@ -91,6 +91,17 @@ func WithVersionServiceEnabled(enabled bool) Option {
 func WithBlockServiceEnabled(enabled bool) Option {
 	return func(b *clientBuilder) {
 		b.blockServiceEnabled = enabled
+	}
+}
+
+// WithBlockResultsServiceEnabled allows control of whether or not to create a
+// client for interacting with the block results service of a CometBFT node.
+//
+// If disabled and the client attempts to access the block results service API, the
+// client will panic.
+func WithBlockResultsServiceEnabled(enabled bool) Option {
+	return func(b *clientBuilder) {
+		b.blockResultsServiceEnabled = enabled
 	}
 }
 

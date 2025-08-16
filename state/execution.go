@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"time"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	"github.com/cometbft/cometbft/internal/fail"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/mempool"
-	"github.com/cometbft/cometbft/proxy"
-	"github.com/cometbft/cometbft/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/internal/fail"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/mempool"
+	"github.com/cometbft/cometbft/v2/proxy"
+	"github.com/cometbft/cometbft/v2/types"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 // -----------------------------------------------------------------------------
@@ -234,7 +234,6 @@ func (blockExec *BlockExecutor) ApplyBlock(
 }
 
 func (blockExec *BlockExecutor) applyBlock(state State, blockID types.BlockID, block *types.Block, syncingToHeight int64) (State, error) {
-	startTime := cmttime.Now().UnixNano()
 	abciResponse, err := blockExec.proxyApp.FinalizeBlock(context.TODO(), &abci.FinalizeBlockRequest{
 		Hash:               block.Hash(),
 		NextValidatorsHash: block.NextValidatorsHash,
@@ -246,8 +245,6 @@ func (blockExec *BlockExecutor) applyBlock(state State, blockID types.BlockID, b
 		Txs:                block.Txs.ToSliceOfBytes(),
 		SyncingToHeight:    syncingToHeight,
 	})
-	endTime := cmttime.Now().UnixNano()
-	blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
 	if err != nil {
 		blockExec.logger.Error("Error in proxyAppConn.FinalizeBlock", "err", err)
 		return state, err
@@ -334,7 +331,7 @@ func (blockExec *BlockExecutor) applyBlock(state State, blockID types.BlockID, b
 
 	// Events are fired after everything else.
 	// NOTE: if we crash between Commit and Save, events won't be fired during replay
-	fireEvents(blockExec.logger, blockExec.eventBus, block, blockID, abciResponse, validatorUpdates)
+	fireEvents(blockExec.logger, blockExec.eventBus, block, blockID, abciResponse, validatorUpdates, blockExec.metrics)
 
 	return state, nil
 }
@@ -344,7 +341,7 @@ func (blockExec *BlockExecutor) ExtendVote(
 	vote *types.Vote,
 	block *types.Block,
 	state State,
-) ([]byte, error) {
+) ([]byte, []byte, error) {
 	if !block.HashesTo(vote.BlockID.Hash) {
 		panic(fmt.Sprintf("vote's hash does not match the block it is referring to %X!=%X", block.Hash(), vote.BlockID.Hash))
 	}
@@ -366,15 +363,16 @@ func (blockExec *BlockExecutor) ExtendVote(
 	if err != nil {
 		panic(fmt.Errorf("ExtendVote call failed: %w", err))
 	}
-	return resp.VoteExtension, nil
+	return resp.VoteExtension, resp.NonRpExtension, nil
 }
 
 func (blockExec *BlockExecutor) VerifyVoteExtension(ctx context.Context, vote *types.Vote) error {
 	req := abci.VerifyVoteExtensionRequest{
-		Hash:             vote.BlockID.Hash,
-		ValidatorAddress: vote.ValidatorAddress,
-		Height:           vote.Height,
-		VoteExtension:    vote.Extension,
+		Hash:               vote.BlockID.Hash,
+		ValidatorAddress:   vote.ValidatorAddress,
+		Height:             vote.Height,
+		VoteExtension:      vote.Extension,
+		NonRpVoteExtension: vote.NonRpExtension,
 	}
 
 	resp, err := blockExec.proxyApp.VerifyVoteExtension(ctx, &req)
@@ -593,10 +591,12 @@ func BuildExtendedCommitInfo(ec *types.ExtendedCommit, valSet *types.ValidatorSe
 		}
 
 		votes[i] = abci.ExtendedVoteInfo{
-			Validator:          types.TM2PB.Validator(val),
-			BlockIdFlag:        cmtproto.BlockIDFlag(ecs.BlockIDFlag),
-			VoteExtension:      ecs.Extension,
-			ExtensionSignature: ecs.ExtensionSignature,
+			Validator:               types.TM2PB.Validator(val),
+			BlockIdFlag:             cmtproto.BlockIDFlag(ecs.BlockIDFlag),
+			VoteExtension:           ecs.Extension,
+			ExtensionSignature:      ecs.ExtensionSignature,
+			NonRpVoteExtension:      ecs.NonRpExtension,
+			NonRpExtensionSignature: ecs.NonRpExtensionSignature,
 		}
 	}
 
@@ -615,9 +615,9 @@ func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate,
 		}
 
 		// Check if validator's pubkey matches an ABCI type in the consensus params.
-		if !types.IsValidPubkeyType(params, valUpdate.PubKeyType) {
-			return fmt.Errorf("validator %X is using pubkey %s, which is unsupported for consensus",
-				valUpdate.PubKeyBytes, valUpdate.PubKeyType)
+		if isValid, suppTypes := types.IsValidPubkeyType(params, valUpdate.PubKeyType); !isValid {
+			return fmt.Errorf("validator %X is using pubkey %s, which is unsupported for consensus (supported types: %s)",
+				valUpdate.PubKeyBytes, valUpdate.PubKeyType, suppTypes)
 		}
 
 		// XXX: PubKeyBytes will be checked in PB2TM.ValidatorUpdates
@@ -713,7 +713,12 @@ func fireEvents(
 	blockID types.BlockID,
 	abciResponse *abci.FinalizeBlockResponse,
 	validatorUpdates []*types.Validator,
+	metrics *Metrics,
 ) {
+	defer func(start time.Time) {
+		metrics.FireBlockEventsDelaySeconds.Set(cmttime.Since(start).Seconds())
+	}(cmttime.Now())
+
 	if err := eventBus.PublishEventNewBlock(types.EventDataNewBlock{
 		Block:               block,
 		BlockID:             blockID,

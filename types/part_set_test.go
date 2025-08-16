@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/crypto/merkle"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
 )
 
 const (
@@ -29,6 +29,7 @@ func TestBasicPartSet(t *testing.T) {
 	assert.True(t, partSet.IsComplete())
 	assert.EqualValues(t, nParts, partSet.Count())
 	assert.EqualValues(t, testPartSize*nParts, partSet.ByteSize())
+	assert.False(t, partSet.IsLocked())
 
 	// Test adding parts to a new partSet.
 	partSet2 := NewPartSetFromHeader(partSet.Header())
@@ -55,6 +56,7 @@ func TestBasicPartSet(t *testing.T) {
 	assert.EqualValues(t, nParts, partSet2.Total())
 	assert.EqualValues(t, nParts*testPartSize, partSet.ByteSize())
 	assert.True(t, partSet2.IsComplete())
+	assert.False(t, partSet2.IsLocked())
 
 	// Reconstruct data, assert that they are equal.
 	data2Reader := partSet2.GetReader()
@@ -62,6 +64,16 @@ func TestBasicPartSet(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, data, data2)
+
+	// Test locking
+	partSet2.Lock()
+	assert.True(t, partSet2.IsLocked())
+	partSet2.Lock()
+	assert.True(t, partSet2.IsLocked())
+	partSet2.Unlock()
+	assert.False(t, partSet2.IsLocked())
+	partSet2.Unlock()
+	assert.False(t, partSet2.IsLocked())
 }
 
 func TestWrongProof(t *testing.T) {
@@ -125,7 +137,7 @@ func TestPartSetHeaderValidateBasic(t *testing.T) {
 	}
 }
 
-func TestPartValidateBasic(t *testing.T) {
+func TestPart_ValidateBasic(t *testing.T) {
 	testCases := []struct {
 		testName     string
 		malleatePart func(*Part)
@@ -137,6 +149,7 @@ func TestPartValidateBasic(t *testing.T) {
 			pt.Index = 1
 			pt.Bytes = make([]byte, BlockPartSizeBytes-1)
 			pt.Proof.Total = 2
+			pt.Proof.Index = 1
 		}, false},
 		{"Too small inner part", func(pt *Part) {
 			pt.Index = 0
@@ -149,6 +162,11 @@ func TestPartValidateBasic(t *testing.T) {
 				Index:    1,
 				LeafHash: make([]byte, 1024*1024),
 			}
+			pt.Index = 1
+		}, true},
+		{"Index mismatch", func(pt *Part) {
+			pt.Index = 1
+			pt.Proof.Index = 0
 		}, true},
 	}
 

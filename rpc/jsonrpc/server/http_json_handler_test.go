@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	"github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
 )
 
 func testMux() *http.ServeMux {
@@ -23,7 +23,7 @@ func testMux() *http.ServeMux {
 	}
 	mux := http.NewServeMux()
 	buf := new(bytes.Buffer)
-	logger := log.NewTMLogger(buf)
+	logger := log.NewLogger(buf)
 	RegisterRPCFuncs(mux, funcMap, logger)
 
 	return mux

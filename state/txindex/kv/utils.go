@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/orderedcode"
 
-	abci "github.com/cometbft/cometbft/abci/types"
-	idxutil "github.com/cometbft/cometbft/internal/indexer"
-	cmtsyntax "github.com/cometbft/cometbft/libs/pubsub/query/syntax"
-	"github.com/cometbft/cometbft/state/indexer"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	idxutil "github.com/cometbft/cometbft/v2/internal/indexer"
+	cmtsyntax "github.com/cometbft/cometbft/v2/libs/pubsub/query/syntax"
+	"github.com/cometbft/cometbft/v2/state/indexer"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 type HeightInfo struct {
@@ -128,7 +128,10 @@ func getKeys(indexer *TxIndex) [][]byte {
 		panic(err)
 	}
 	for ; itr.Valid(); itr.Next() {
-		keys = append(keys, itr.Key())
+		key := make([]byte, len(itr.Key()))
+		copy(key, itr.Key())
+
+		keys = append(keys, key)
 	}
 	return keys
 }

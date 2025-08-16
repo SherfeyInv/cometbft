@@ -8,19 +8,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	cmtcons "github.com/cometbft/cometbft/api/cometbft/consensus/v1"
-	"github.com/cometbft/cometbft/internal/bits"
-	cstypes "github.com/cometbft/cometbft/internal/consensus/types"
-	cmtevents "github.com/cometbft/cometbft/internal/events"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
-	"github.com/cometbft/cometbft/p2p"
-	sm "github.com/cometbft/cometbft/state"
-	"github.com/cometbft/cometbft/types"
-	cmterrors "github.com/cometbft/cometbft/types/errors"
-	cmttime "github.com/cometbft/cometbft/types/time"
+	cmtcons "github.com/cometbft/cometbft/api/cometbft/consensus/v2"
+	"github.com/cometbft/cometbft/v2/internal/bits"
+	cstypes "github.com/cometbft/cometbft/v2/internal/consensus/types"
+	cmtevents "github.com/cometbft/cometbft/v2/internal/events"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	"github.com/cometbft/cometbft/v2/p2p"
+	tcpconn "github.com/cometbft/cometbft/v2/p2p/transport/tcp/conn"
+	sm "github.com/cometbft/cometbft/v2/state"
+	"github.com/cometbft/cometbft/v2/types"
+	cmterrors "github.com/cometbft/cometbft/v2/types/errors"
+	cmttime "github.com/cometbft/cometbft/v2/types/time"
 )
 
 const (
@@ -46,8 +47,9 @@ type Reactor struct {
 	waitSync atomic.Bool
 	eventBus *types.EventBus
 
-	rsMtx cmtsync.Mutex
-	rs    *cstypes.RoundState
+	rsMtx         cmtsync.RWMutex
+	rs            cstypes.RoundState // copy of consensus state
+	initialHeight atomic.Int64
 
 	Metrics *Metrics
 }
@@ -57,11 +59,13 @@ type ReactorOption func(*Reactor)
 // NewReactor returns a new Reactor with the given consensusState.
 func NewReactor(consensusState *State, waitSync bool, options ...ReactorOption) *Reactor {
 	conR := &Reactor{
-		conS:     consensusState,
-		waitSync: atomic.Bool{},
-		rs:       consensusState.GetRoundState(),
-		Metrics:  NopMetrics(),
+		conS:          consensusState,
+		waitSync:      atomic.Bool{},
+		rs:            consensusState.GetRoundState(),
+		initialHeight: atomic.Int64{},
+		Metrics:       NopMetrics(),
 	}
+	conR.initialHeight.Store(consensusState.state.InitialHeight)
 	conR.BaseReactor = *p2p.NewBaseReactor("Consensus", conR)
 	if waitSync {
 		conR.waitSync.Store(true)
@@ -85,7 +89,6 @@ func (conR *Reactor) OnStart() error {
 	go conR.peerStatsRoutine()
 
 	conR.subscribeToBroadcastEvents()
-	go conR.updateRoundStateRoutine()
 
 	if !conR.WaitSync() {
 		err := conR.conS.Start()
@@ -149,41 +152,41 @@ conR:
 	}
 }
 
-// GetChannels implements Reactor.
-func (*Reactor) GetChannels() []*p2p.ChannelDescriptor {
+// StreamDescriptors implements Reactor.
+func (*Reactor) StreamDescriptors() []p2p.StreamDescriptor {
 	// TODO optimize
-	return []*p2p.ChannelDescriptor{
-		{
+	return []p2p.StreamDescriptor{
+		tcpconn.StreamDescriptor{
 			ID:                  StateChannel,
 			Priority:            6,
 			SendQueueCapacity:   100,
 			RecvMessageCapacity: maxMsgSize,
-			MessageType:         &cmtcons.Message{},
+			MessageTypeI:        &cmtcons.Message{},
 		},
-		{
+		tcpconn.StreamDescriptor{
 			ID: DataChannel, // maybe split between gossiping current block and catchup stuff
 			// once we gossip the whole block there's nothing left to send until next height or round
 			Priority:            10,
 			SendQueueCapacity:   100,
 			RecvBufferCapacity:  50 * 4096,
 			RecvMessageCapacity: maxMsgSize,
-			MessageType:         &cmtcons.Message{},
+			MessageTypeI:        &cmtcons.Message{},
 		},
-		{
+		tcpconn.StreamDescriptor{
 			ID:                  VoteChannel,
 			Priority:            7,
 			SendQueueCapacity:   100,
 			RecvBufferCapacity:  100 * 100,
 			RecvMessageCapacity: maxMsgSize,
-			MessageType:         &cmtcons.Message{},
+			MessageTypeI:        &cmtcons.Message{},
 		},
-		{
+		tcpconn.StreamDescriptor{
 			ID:                  VoteSetBitsChannel,
 			Priority:            1,
 			SendQueueCapacity:   2,
 			RecvBufferCapacity:  1024,
 			RecvMessageCapacity: maxMsgSize,
-			MessageType:         &cmtcons.Message{},
+			MessageTypeI:        &cmtcons.Message{},
 		},
 	}
 }
@@ -267,9 +270,7 @@ func (conR *Reactor) Receive(e p2p.Envelope) {
 	case StateChannel:
 		switch msg := msg.(type) {
 		case *NewRoundStepMessage:
-			conR.conS.mtx.RLock()
-			initialHeight := conR.conS.state.InitialHeight
-			conR.conS.mtx.RUnlock()
+			initialHeight := conR.initialHeight.Load()
 			if err = msg.ValidateHeight(initialHeight); err != nil {
 				conR.Logger.Error("Peer sent us invalid msg", "peer", e.Src, "msg", msg, "err", err)
 				conR.Switch.StopPeerForError(e.Src, err)
@@ -283,10 +284,9 @@ func (conR *Reactor) Receive(e p2p.Envelope) {
 		case *HasProposalBlockPartMessage:
 			ps.ApplyHasProposalBlockPartMessage(msg)
 		case *VoteSetMaj23Message:
-			cs := conR.conS
-			cs.mtx.RLock()
-			height, votes := cs.Height, cs.Votes
-			cs.mtx.RUnlock()
+			// Get the updated round state as our view may be stale
+			rs := conR.conS.GetRoundState()
+			height, votes := rs.Height, rs.Votes
 			if height != msg.Height {
 				return
 			}
@@ -316,7 +316,7 @@ func (conR *Reactor) Receive(e p2p.Envelope) {
 			if votes := ourVotes.ToProto(); votes != nil {
 				eMsg.Votes = *votes
 			}
-			e.Src.TrySend(p2p.Envelope{
+			_ = e.Src.TrySend(p2p.Envelope{
 				ChannelID: VoteSetBitsChannel,
 				Message:   eMsg,
 			})
@@ -337,7 +337,7 @@ func (conR *Reactor) Receive(e p2p.Envelope) {
 			ps.ApplyProposalPOLMessage(msg)
 		case *BlockPartMessage:
 			ps.SetHasProposalBlockPart(msg.Height, msg.Round, int(msg.Part.Index))
-			conR.Metrics.BlockParts.With("peer_id", string(e.Src.ID())).Add(1)
+			conR.Metrics.BlockParts.With("peer_id", e.Src.ID()).Add(1)
 			conR.conS.peerMsgQueue <- msgInfo{msg, e.Src.ID(), time.Time{}}
 		default:
 			conR.Logger.Error(fmt.Sprintf("Unknown message type %v", reflect.TypeOf(msg)))
@@ -350,13 +350,12 @@ func (conR *Reactor) Receive(e p2p.Envelope) {
 		}
 		switch msg := msg.(type) {
 		case *VoteMessage:
-			cs := conR.conS
-			cs.mtx.RLock()
-			height, valSize, lastCommitSize := cs.Height, cs.Validators.Size(), cs.LastCommit.Size()
-			cs.mtx.RUnlock()
+			rs := conR.getRoundState()
+
+			height, valSize, lastCommitSize := rs.Height, rs.Validators.Size(), rs.LastCommit.Size()
 			ps.SetHasVoteFromPeer(msg.Vote, height, valSize, lastCommitSize)
 
-			cs.peerMsgQueue <- msgInfo{msg, e.Src.ID(), time.Time{}}
+			conR.conS.peerMsgQueue <- msgInfo{msg, e.Src.ID(), time.Time{}}
 
 		default:
 			// don't punish (leave room for soft upgrades)
@@ -370,10 +369,10 @@ func (conR *Reactor) Receive(e p2p.Envelope) {
 		}
 		switch msg := msg.(type) {
 		case *VoteSetBitsMessage:
-			cs := conR.conS
-			cs.mtx.RLock()
-			height, votes := cs.Height, cs.Votes
-			cs.mtx.RUnlock()
+			// Get the updated round state as our view may be stale
+			rs := conR.conS.GetRoundState()
+
+			height, votes := rs.Height, rs.Votes
 
 			if height == msg.Height {
 				var ourVotes *bits.BitArray
@@ -419,14 +418,24 @@ func (conR *Reactor) subscribeToBroadcastEvents() {
 	const subscriber = "consensus-reactor"
 	if err := conR.conS.evsw.AddListenerForEvent(subscriber, types.EventNewRoundStep,
 		func(data cmtevents.EventData) {
-			conR.broadcastNewRoundStepMessage(data.(*cstypes.RoundState))
+			rs := data.(cstypes.RoundState)
+
+			// update reactor's view of round state
+			conR.updateRoundState(&rs)
+
+			conR.broadcastNewRoundStepMessage(&rs)
 		}); err != nil {
 		conR.Logger.Error("Error adding listener for events (NewRoundStep)", "err", err)
 	}
 
 	if err := conR.conS.evsw.AddListenerForEvent(subscriber, types.EventValidBlock,
 		func(data cmtevents.EventData) {
-			conR.broadcastNewValidBlockMessage(data.(*cstypes.RoundState))
+			rs := data.(cstypes.RoundState)
+
+			// update reactor's view of round state
+			conR.updateRoundState(&rs)
+
+			conR.broadcastNewValidBlockMessage(&rs)
 		}); err != nil {
 		conR.Logger.Error("Error adding listener for events (ValidBlock)", "err", err)
 	}
@@ -434,6 +443,13 @@ func (conR *Reactor) subscribeToBroadcastEvents() {
 	if err := conR.conS.evsw.AddListenerForEvent(subscriber, types.EventVote,
 		func(data cmtevents.EventData) {
 			conR.broadcastHasVoteMessage(data.(*types.Vote))
+
+			// update reactor's view of round state
+			// NOTE this is safe to do without locking cs because the eventBus is
+			// synchronous. If it were not, we could pass rs in this event
+			// instead
+			rs := conR.conS.getRoundState()
+			conR.updateRoundState(&rs)
 		}); err != nil {
 		conR.Logger.Error("Error adding listener for events (Vote)", "err", err)
 	}
@@ -441,9 +457,23 @@ func (conR *Reactor) subscribeToBroadcastEvents() {
 	if err := conR.conS.evsw.AddListenerForEvent(subscriber, types.EventProposalBlockPart,
 		func(data cmtevents.EventData) {
 			conR.broadcastHasProposalBlockPartMessage(data.(*BlockPartMessage))
+
+			// update reactor's view of round state
+			// NOTE this is safe to do without locking cs because the eventBus is
+			// synchronous. If it were not, we could pass rs in this event
+			// instead
+			rs := conR.conS.getRoundState()
+			conR.updateRoundState(&rs)
 		}); err != nil {
 		conR.Logger.Error("Error adding listener for events (ProposalBlockPart)", "err", err)
 	}
+}
+
+// Safely update the reactor's view of round state.
+func (conR *Reactor) updateRoundState(rs *cstypes.RoundState) {
+	conR.rsMtx.Lock()
+	conR.rs = *rs // copy
+	conR.rsMtx.Unlock()
 }
 
 func (conR *Reactor) unsubscribeFromBroadcastEvents() {
@@ -488,7 +518,7 @@ func (conR *Reactor) broadcastHasVoteMessage(vote *types.Vote) {
 	}
 
 	go func() {
-		conR.Switch.Broadcast(p2p.Envelope{
+		conR.Switch.TryBroadcast(p2p.Envelope{
 			ChannelID: StateChannel,
 			Message:   msg,
 		})
@@ -525,7 +555,7 @@ func (conR *Reactor) broadcastHasProposalBlockPartMessage(partMsg *BlockPartMess
 		Index:  int32(partMsg.Part.Index),
 	}
 	go func() {
-		conR.Switch.Broadcast(p2p.Envelope{
+		conR.Switch.TryBroadcast(p2p.Envelope{
 			ChannelID: StateChannel,
 			Message:   msg,
 		})
@@ -545,30 +575,16 @@ func makeRoundStepMessage(rs *cstypes.RoundState) (nrsMsg *cmtcons.NewRoundStep)
 
 func (conR *Reactor) sendNewRoundStepMessage(peer p2p.Peer) {
 	rs := conR.getRoundState()
-	nrsMsg := makeRoundStepMessage(rs)
-	peer.Send(p2p.Envelope{
+	nrsMsg := makeRoundStepMessage(&rs)
+	_ = peer.Send(p2p.Envelope{
 		ChannelID: StateChannel,
 		Message:   nrsMsg,
 	})
 }
 
-func (conR *Reactor) updateRoundStateRoutine() {
-	t := time.NewTicker(100 * time.Microsecond)
-	defer t.Stop()
-	for range t.C {
-		if !conR.IsRunning() {
-			return
-		}
-		rs := conR.conS.GetRoundState()
-		conR.rsMtx.Lock()
-		conR.rs = rs
-		conR.rsMtx.Unlock()
-	}
-}
-
-func (conR *Reactor) getRoundState() *cstypes.RoundState {
-	conR.rsMtx.Lock()
-	defer conR.rsMtx.Unlock()
+func (conR *Reactor) getRoundState() cstypes.RoundState {
+	conR.rsMtx.RLock()
+	defer conR.rsMtx.RUnlock()
 	return conR.rs
 }
 
@@ -577,6 +593,10 @@ func (conR *Reactor) getRoundState() *cstypes.RoundState {
 
 func (conR *Reactor) gossipDataRoutine(peer p2p.Peer, ps *PeerState) {
 	logger := conR.Logger.With("peer", peer)
+	if !peer.HasChannel(DataChannel) {
+		logger.Info("Peer does not implement DataChannel.")
+		return
+	}
 	rng := cmtrand.NewStdlibRand()
 
 OUTER_LOOP:
@@ -602,7 +622,7 @@ OUTER_LOOP:
 		// (Note these can match on hash so round doesn't matter)
 		// --------------------
 
-		if part, continueLoop := pickPartToSend(logger, conR.conS.blockStore, rs, ps, prs, rng); part != nil {
+		if part, continueLoop := pickPartToSend(logger, conR.conS.blockStore, &rs, ps, prs, rng); part != nil {
 			// part is not nil: we either succeed in sending it,
 			// or we were instructed not to sleep (busy-waiting)
 			if ps.SendPartSetHasPart(part, prs) || continueLoop {
@@ -622,7 +642,7 @@ OUTER_LOOP:
 		proposalToSend := rs.Proposal != nil && !prs.Proposal
 
 		if heightRoundMatch && proposalToSend {
-			ps.SendProposalSetHasProposal(logger, rs, prs)
+			ps.SendProposalSetHasProposal(logger, &rs, prs)
 			continue OUTER_LOOP
 		}
 
@@ -633,6 +653,10 @@ OUTER_LOOP:
 
 func (conR *Reactor) gossipVotesRoutine(peer p2p.Peer, ps *PeerState) {
 	logger := conR.Logger.With("peer", peer)
+	if !peer.HasChannel(VoteChannel) {
+		logger.Info("Peer does not implement VoteChannel.")
+		return
+	}
 	rng := cmtrand.NewStdlibRand()
 
 	// Simple hack to throttle logs upon sleep.
@@ -666,7 +690,7 @@ OUTER_LOOP:
 		// logger.Debug("gossipVotesRoutine", "rsHeight", rs.Height, "rsRound", rs.Round,
 		// "prsHeight", prs.Height, "prsRound", prs.Round, "prsStep", prs.Step)
 
-		if vote := pickVoteToSend(logger, conR.conS, rs, ps, prs, rng); vote != nil {
+		if vote := pickVoteToSend(logger, conR.conS, &rs, ps, prs, rng); vote != nil {
 			if ps.sendVoteSetHasVote(vote) {
 				continue OUTER_LOOP
 			}
@@ -707,7 +731,7 @@ OUTER_LOOP:
 			prs := ps.GetRoundState()
 			if rs.Height == prs.Height {
 				if maj23, ok := rs.Votes.Prevotes(prs.Round).TwoThirdsMajority(); ok {
-					peer.TrySend(p2p.Envelope{
+					_ = peer.TrySend(p2p.Envelope{
 						ChannelID: StateChannel,
 						Message: &cmtcons.VoteSetMaj23{
 							Height:  prs.Height,
@@ -727,7 +751,7 @@ OUTER_LOOP:
 			prs := ps.GetRoundState()
 			if rs.Height == prs.Height {
 				if maj23, ok := rs.Votes.Precommits(prs.Round).TwoThirdsMajority(); ok {
-					peer.TrySend(p2p.Envelope{
+					_ = peer.TrySend(p2p.Envelope{
 						ChannelID: StateChannel,
 						Message: &cmtcons.VoteSetMaj23{
 							Height:  prs.Height,
@@ -747,7 +771,7 @@ OUTER_LOOP:
 			prs := ps.GetRoundState()
 			if rs.Height == prs.Height && prs.ProposalPOLRound >= 0 {
 				if maj23, ok := rs.Votes.Prevotes(prs.ProposalPOLRound).TwoThirdsMajority(); ok {
-					peer.TrySend(p2p.Envelope{
+					_ = peer.TrySend(p2p.Envelope{
 						ChannelID: StateChannel,
 						Message: &cmtcons.VoteSetMaj23{
 							Height:  prs.Height,
@@ -770,7 +794,7 @@ OUTER_LOOP:
 			if prs.CatchupCommitRound != -1 && prs.Height > 0 && prs.Height <= conR.conS.blockStore.Height() &&
 				prs.Height >= conR.conS.blockStore.Base() {
 				if commit := conR.conS.LoadCommit(prs.Height); commit != nil {
-					peer.TrySend(p2p.Envelope{
+					_ = peer.TrySend(p2p.Envelope{
 						ChannelID: StateChannel,
 						Message: &cmtcons.VoteSetMaj23{
 							Height:  prs.Height,
@@ -802,7 +826,7 @@ func pickPartToSend(
 	rng *rand.Rand,
 ) (*types.Part, bool) {
 	// If peer has same part set header as us, send block parts
-	if rs.ProposalBlockParts.HasHeader(prs.ProposalBlockPartSetHeader) {
+	if rs.ProposalBlockParts.HasHeader(prs.ProposalBlockPartSetHeader) && !rs.ProposalBlockParts.IsLocked() {
 		if index, ok := rs.ProposalBlockParts.BitArray().Sub(prs.ProposalBlockParts.Copy()).PickRandom(rng); ok {
 			part := rs.ProposalBlockParts.GetPart(index)
 			// If sending this part fails, restart the OUTER_LOOP (busy-waiting).
@@ -1204,19 +1228,20 @@ func (ps *PeerState) SendPartSetHasPart(part *types.Part, prs *cstypes.PeerRound
 		ps.logger.Error("Could not convert part to proto", "index", part.Index, "error", err)
 		return false
 	}
-	if ps.peer.Send(p2p.Envelope{
+	if err = ps.peer.Send(p2p.Envelope{
 		ChannelID: DataChannel,
 		Message: &cmtcons.BlockPart{
 			Height: prs.Height, // Not our height, so it doesn't matter.
 			Round:  prs.Round,  // Not our height, so it doesn't matter.
 			Part:   *pp,
 		},
-	}) {
-		ps.SetHasProposalBlockPart(prs.Height, prs.Round, int(part.Index))
-		return true
+	}); err != nil {
+		ps.logger.Debug("Sending block part failed")
+		return false
 	}
-	ps.logger.Debug("Sending block part failed")
-	return false
+
+	ps.SetHasProposalBlockPart(prs.Height, prs.Round, int(part.Index))
+	return true
 }
 
 // SendProposalSetHasProposal sends the Proposal (and ProposalPOL if there is one) to the peer.
@@ -1228,10 +1253,10 @@ func (ps *PeerState) SendProposalSetHasProposal(
 ) {
 	// Proposal: share the proposal metadata with peer.
 	logger.Debug("Sending proposal", "height", prs.Height, "round", prs.Round)
-	if ps.peer.Send(p2p.Envelope{
+	if err := ps.peer.Send(p2p.Envelope{
 		ChannelID: DataChannel,
 		Message:   &cmtcons.Proposal{Proposal: *rs.Proposal.ToProto()},
-	}) {
+	}); err == nil {
 		// NOTE[ZM]: A peer might have received different proposal msg so this Proposal msg will be rejected!
 		ps.SetHasProposal(rs.Proposal)
 	}
@@ -1242,7 +1267,7 @@ func (ps *PeerState) SendProposalSetHasProposal(
 	// so we definitely have rs.Votes.Prevotes(rs.Proposal.POLRound).
 	if 0 <= rs.Proposal.POLRound {
 		logger.Debug("Sending POL", "height", prs.Height, "round", prs.Round)
-		ps.peer.Send(p2p.Envelope{
+		_ = ps.peer.Send(p2p.Envelope{
 			ChannelID: DataChannel,
 			Message: &cmtcons.ProposalPOL{
 				Height:           rs.Height,
@@ -1257,16 +1282,17 @@ func (ps *PeerState) SendProposalSetHasProposal(
 // Returns true and marks the peer as having the vote if the vote was sent.
 func (ps *PeerState) sendVoteSetHasVote(vote *types.Vote) bool {
 	ps.logger.Debug("Sending vote message", "ps", ps, "vote", vote)
-	if ps.peer.Send(p2p.Envelope{
+	if err := ps.peer.Send(p2p.Envelope{
 		ChannelID: VoteChannel,
 		Message: &cmtcons.Vote{
 			Vote: vote.ToProto(),
 		},
-	}) {
-		ps.SetHasVote(vote)
-		return true
+	}); err != nil {
+		return false
 	}
-	return false
+
+	ps.SetHasVote(vote)
+	return true
 }
 
 // PickVoteToSend picks a vote to send to the peer.

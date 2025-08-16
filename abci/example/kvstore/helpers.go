@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	cmtrand "github.com/cometbft/cometbft/internal/rand"
+	"github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/crypto/ed25519"
+	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
 )
 
 // RandVal creates one random validator, with a key derived
@@ -22,7 +22,7 @@ func RandVal() types.ValidatorUpdate {
 // RandVals returns a list of cnt validators for initializing
 // the application. Note that the keys are deterministically
 // derived from the index in the array, while the power is
-// random (Change this if not desired).
+// random (change this if not desired).
 func RandVals(cnt int) []types.ValidatorUpdate {
 	res := make([]types.ValidatorUpdate, cnt)
 	for i := 0; i < cnt; i++ {
@@ -41,7 +41,7 @@ func InitKVStore(ctx context.Context, app *Application) error {
 	return err
 }
 
-// Create a new transaction.
+// NewTx creates a new transaction.
 func NewTx(key, value string) []byte {
 	return []byte(strings.Join([]string{key, value}, "="))
 }

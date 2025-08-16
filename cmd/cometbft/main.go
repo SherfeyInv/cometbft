@@ -4,11 +4,12 @@ import (
 	"os"
 	"path/filepath"
 
-	cmd "github.com/cometbft/cometbft/cmd/cometbft/commands"
-	"github.com/cometbft/cometbft/cmd/cometbft/commands/debug"
-	cfg "github.com/cometbft/cometbft/config"
-	"github.com/cometbft/cometbft/libs/cli"
-	nm "github.com/cometbft/cometbft/node"
+	cmd "github.com/cometbft/cometbft/v2/cmd/cometbft/commands"
+	"github.com/cometbft/cometbft/v2/cmd/cometbft/commands/config"
+	"github.com/cometbft/cometbft/v2/cmd/cometbft/commands/debug"
+	cfg "github.com/cometbft/cometbft/v2/config"
+	"github.com/cometbft/cometbft/v2/libs/cli"
+	nm "github.com/cometbft/cometbft/v2/node"
 )
 
 func main() {
@@ -23,12 +24,14 @@ func main() {
 		cmd.ShowValidatorCmd,
 		cmd.TestnetFilesCmd,
 		cmd.ShowNodeIDCmd,
+		cmd.ReIndexEventCmd,
 		cmd.GenNodeKeyCmd,
 		cmd.VersionCmd,
 		cmd.RollbackStateCmd,
 		cmd.CompactGoLevelDBCmd,
 		cmd.InspectCmd,
 		debug.DebugCmd,
+		config.Command(),
 		cli.NewCompletionCmd(rootCmd, true),
 	)
 

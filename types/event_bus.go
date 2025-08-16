@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
-	"github.com/cometbft/cometbft/libs/service"
+	"github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/libs/log"
+	cmtpubsub "github.com/cometbft/cometbft/v2/libs/pubsub"
+	"github.com/cometbft/cometbft/v2/libs/service"
 )
 
 const defaultCapacity = 0
@@ -116,13 +116,13 @@ func (*EventBus) validateAndStringifyEvents(events []types.Event) map[string][]s
 		if len(event.Type) == 0 {
 			continue
 		}
-
+		prefix := event.Type + "."
 		for _, attr := range event.Attributes {
 			if len(attr.Key) == 0 {
 				continue
 			}
 
-			compositeTag := fmt.Sprintf("%s.%s", event.Type, attr.Key)
+			compositeTag := prefix + attr.Key
 			result[compositeTag] = append(result[compositeTag], attr.Value)
 		}
 	}
@@ -167,6 +167,15 @@ func (b *EventBus) PublishEventVote(data EventDataVote) error {
 
 func (b *EventBus) PublishEventValidBlock(data EventDataRoundState) error {
 	return b.Publish(EventValidBlock, data)
+}
+
+func (b *EventBus) PublishEventPendingTx(data EventDataPendingTx) error {
+	// no explicit deadline for publishing events
+	ctx := context.Background()
+	return b.pubsub.PublishWithEvents(ctx, data, map[string][]string{
+		EventTypeKey: {EventPendingTx},
+		TxHashKey:    {fmt.Sprintf("%X", Tx(data.Tx).Hash())},
+	})
 }
 
 // PublishEventTx publishes tx event with events from Result. Note it will add
@@ -259,6 +268,10 @@ func (NopEventBus) PublishEventNewEvidence(EventDataNewEvidence) error {
 }
 
 func (NopEventBus) PublishEventVote(EventDataVote) error {
+	return nil
+}
+
+func (NopEventBus) PublishEventPendingTx(EventDataPendingTx) error {
 	return nil
 }
 

@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io"
 
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
-	"github.com/cometbft/cometbft/crypto/merkle"
-	"github.com/cometbft/cometbft/internal/bits"
-	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
-	cmtjson "github.com/cometbft/cometbft/libs/json"
-	cmtmath "github.com/cometbft/cometbft/libs/math"
-	cmtsync "github.com/cometbft/cometbft/libs/sync"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
+	"github.com/cometbft/cometbft/v2/crypto/merkle"
+	"github.com/cometbft/cometbft/v2/internal/bits"
+	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
+	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
+	cmtmath "github.com/cometbft/cometbft/v2/libs/math"
+	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
 )
 
 var (
@@ -21,6 +21,19 @@ var (
 	ErrPartTooBig             = errors.New("error part size too big")
 	ErrPartInvalidSize        = errors.New("error inner part with invalid size")
 )
+
+// ErrInvalidPart is an error type for invalid parts.
+type ErrInvalidPart struct {
+	Reason error
+}
+
+func (e ErrInvalidPart) Error() string {
+	return fmt.Sprintf("invalid part: %v", e.Reason)
+}
+
+func (e ErrInvalidPart) Unwrap() error {
+	return e.Reason
+}
 
 type Part struct {
 	Index uint32            `json:"index"`
@@ -37,8 +50,11 @@ func (part *Part) ValidateBasic() error {
 	if int64(part.Index) < part.Proof.Total-1 && len(part.Bytes) != int(BlockPartSizeBytes) {
 		return ErrPartInvalidSize
 	}
+	if int64(part.Index) != part.Proof.Index {
+		return ErrInvalidPart{Reason: fmt.Errorf("part index %d != proof index %d", part.Index, part.Proof.Index)}
+	}
 	if err := part.Proof.ValidateBasic(); err != nil {
-		return fmt.Errorf("wrong Proof: %w", err)
+		return ErrInvalidPart{Reason: fmt.Errorf("wrong Proof: %w", err)}
 	}
 	return nil
 }
@@ -170,6 +186,10 @@ type PartSet struct {
 	// a count of the total size (in bytes). Used to ensure that the
 	// part set doesn't exceed the maximum block bytes
 	byteSize int64
+
+	// Workaround to prevent the consensus Reactor from reading from an
+	// incomplete part set when the node is the round's proposer.
+	locked bool
 }
 
 // NewPartSetFromData returns an immutable, full PartSet from the data bytes.
@@ -274,6 +294,7 @@ func (ps *PartSet) Total() uint32 {
 	return ps.total
 }
 
+// CONTRACT: part is validated using ValidateBasic.
 func (ps *PartSet) AddPart(part *Part) (bool, error) {
 	// TODO: remove this? would be preferable if this only returned (false, nil)
 	// when its a duplicate block part
@@ -327,6 +348,24 @@ func (ps *PartSet) GetReader() io.Reader {
 		panic("Cannot GetReader() on incomplete PartSet")
 	}
 	return NewPartSetReader(ps.parts)
+}
+
+func (ps *PartSet) IsLocked() bool {
+	ps.mtx.Lock()
+	defer ps.mtx.Unlock()
+	return ps.locked
+}
+
+func (ps *PartSet) Lock() {
+	ps.mtx.Lock()
+	defer ps.mtx.Unlock()
+	ps.locked = true
+}
+
+func (ps *PartSet) Unlock() {
+	ps.mtx.Lock()
+	defer ps.mtx.Unlock()
+	ps.locked = false
 }
 
 type PartSetReader struct {

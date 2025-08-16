@@ -4,10 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/go-kit/kit/metrics"
-
-	abcicli "github.com/cometbft/cometbft/abci/client"
-	abcitypes "github.com/cometbft/cometbft/abci/types"
+	abcicli "github.com/cometbft/cometbft/v2/abci/client"
+	abcitypes "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/libs/metrics"
 )
 
 //go:generate ../scripts/mockery_generate.sh AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot

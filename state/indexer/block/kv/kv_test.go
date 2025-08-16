@@ -13,12 +13,12 @@ import (
 	"golang.org/x/exp/slices"
 
 	db "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/internal/test"
-	"github.com/cometbft/cometbft/libs/pubsub/query"
-	blockidxkv "github.com/cometbft/cometbft/state/indexer/block/kv"
-	"github.com/cometbft/cometbft/state/txindex/kv"
-	"github.com/cometbft/cometbft/types"
+	abci "github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/v2/internal/test"
+	"github.com/cometbft/cometbft/v2/libs/pubsub/query"
+	blockidxkv "github.com/cometbft/cometbft/v2/state/indexer/block/kv"
+	"github.com/cometbft/cometbft/v2/state/txindex/kv"
+	"github.com/cometbft/cometbft/v2/types"
 )
 
 func TestBlockerIndexer_Prune(t *testing.T) {
@@ -66,7 +66,7 @@ func BenchmarkBlockerIndexer_Prune(_ *testing.B) {
 		}
 	}()
 
-	store, err := db.NewDB("block", db.GoLevelDBBackend, config.DBDir())
+	store, err := db.NewDB("block", db.PebbleDBBackend, config.DBDir())
 	if err != nil {
 		panic(err)
 	}

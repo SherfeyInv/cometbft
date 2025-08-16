@@ -68,8 +68,8 @@ ifeq (linux/riscv64,$(findstring linux/riscv64,$(TARGETPLATFORM)))
 	GOARCH=riscv64
 endif
 
-#? all: Run target check, build, test and install
-all: check build test install
+#? all: Run target build, test and install
+all: build test install
 .PHONY: all
 
 include tests.mk
@@ -247,11 +247,6 @@ lint: pre-commit
 	@pre-commit run
 .PHONY: lint
 
-#? vulncheck: Run latest govulncheck
-vulncheck:
-	@go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-.PHONY: vulncheck
-
 #? pre-commit: Create pre-commit hook using the pre-commit framework.
 pre-commit:
 	@which pre-commit || pip3 install pre-commit
@@ -259,7 +254,6 @@ pre-commit:
 .PHONY: pre-commit
 
 DESTINATION = ./index.html.md
-
 
 ###############################################################################
 ###                           Documentation                                 ###
@@ -293,31 +287,6 @@ build-linux:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) $(MAKE) build
 .PHONY: build-linux
 
-#? build-docker-localnode: Build the "localnode" docker image
-build-docker-localnode:
-	@cd networks/local && make
-.PHONY: build-docker-localnode
-
-
-#? localnet-start: Run a 4-node testnet locally
-localnet-start: localnet-stop build-docker-localnode
-	@if ! [ -f build/node0/config/genesis.json ]; then docker run --rm -v $(CURDIR)/build:/cometbft:Z cometbft/localnode testnet --config /etc/cometbft/config-template.toml --o . --starting-ip-address 192.167.10.2; fi
-	docker-compose up -d
-.PHONY: localnet-start
-
-#? localnet-stop: Stop testnet
-localnet-stop:
-	docker-compose down
-.PHONY: localnet-stop
-
-#? monitoring-start: Start Prometheus and Grafana servers for localnet monitoring
-monitoring-start:
-	cd test/monitoring && docker-compose up -d
-
-#? monitoring-stop: Stop the Prometheus and Grafana servers
-monitoring-stop:
-	cd test/monitoring && docker-compose down
-
 #? build-contract-tests-hooks: Build hooks for dredd, to skip or add information on some steps
 build-contract-tests-hooks:
 ifeq ($(OS),Windows_NT)
@@ -336,30 +305,24 @@ contract-tests:
 	dredd
 .PHONY: contract-tests
 
-# Implements test splitting and running. This is pulled directly from
-# the github action workflows for better local reproducibility.
-
-GO_TEST_FILES != find $(CURDIR) -name "*_test.go"
-
-# default to four splits by default
-NUM_SPLIT ?= 4
-
 $(BUILDDIR):
 	mkdir -p $@
-
-# The format statement filters out all packages that don't have tests.
-# Note we need to check for both in-package tests (.TestGoFiles) and
-# out-of-package tests (.XTestGoFiles).
-$(BUILDDIR)/packages.txt:$(GO_TEST_FILES) $(BUILDDIR)
-	go list -f "{{ if (or .TestGoFiles .XTestGoFiles) }}{{ .ImportPath }}{{ end }}" ./... | sort > $@
-
-split-test-packages:$(BUILDDIR)/packages.txt
-	split -d -n l/$(NUM_SPLIT) $< $<.
-test-group-%:split-test-packages
-	cat $(BUILDDIR)/packages.txt.$* | xargs go test -mod=readonly -timeout=400s -race -coverprofile=$(BUILDDIR)/$*.profile.out
 
 #? help: Get more info on make commands.
 help: Makefile
 	@echo " Choose a command run in comebft:"
 	@sed -n 's/^#?//p' $< | column -t -s ':' |  sort | sed -e 's/^/ /'
 .PHONY: help
+
+###############################################################################
+###                       			Benchmarking                                ###
+###############################################################################
+
+#? bench: Run benchmarks
+bench:
+	@echo "--> Running benchmarks (this might take a while)"
+	@go install go.bobheadxi.dev/gobenchdata@latest
+	@go test -bench . -benchmem ./... | gobenchdata --json benchmarks.json
+	@gobenchdata web generate .
+	@echo "--> Serving results at http://localhost:8080"
+	@gobenchdata web serve

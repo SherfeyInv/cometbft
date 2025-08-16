@@ -6,32 +6,35 @@
 [![Version][version-badge]][version-url]
 [![API Reference][api-badge]][api-url]
 [![Go version][go-badge]][go-url]
-[![Discord chat][discord-badge]][discord-url]
 [![License][license-badge]][license-url]
 [![Sourcegraph][sg-badge]][sg-url]
+
+[![Discord chat][discord-badge]][discord-url]
 
 | Branch  | Tests                                          | Linting                                     |
 |---------|------------------------------------------------|---------------------------------------------|
 | main    | [![Tests][tests-badge]][tests-url]             | [![Lint][lint-badge]][lint-url]             |
 | v1.x    | [![Tests][tests-badge-v1x]][tests-url-v1x]     | [![Lint][lint-badge-v1x]][lint-url-v1x]     |
 | v0.38.x | [![Tests][tests-badge-v038x]][tests-url-v038x] | [![Lint][lint-badge-v038x]][lint-url-v038x] |
-| v0.37.x | [![Tests][tests-badge-v037x]][tests-url-v037x] | [![Lint][lint-badge-v037x]][lint-url-v037x] |
-| v0.34.x | [![Tests][tests-badge-v034x]][tests-url-v034x] | [![Lint][lint-badge-v034x]][lint-url-v034x] |
 
 CometBFT is a Byzantine Fault Tolerant (BFT) middleware that takes a
 state transition machine - written in any programming language - and securely
-replicates it on many machines.
+replicates it on many machines. In modular blockchain terminology,
+CometBFT can be thought of as a sequencer layer and is indeed used in
+modern decentralized (shared) sequencer implementations.
 
 CometBFT is the canonical implementation of the Tendermint consensus algorithm and is a
 primary building block for the [Interchain Stack](https://interchain.io/). Historically,
 CometBFT originated as a fork of [Tendermint Core][tm-core] in early 2023
-(announcement [here][comet-announcement]) and since then it diverged significantly by adopting modern features such as [PBTS][pbts] or [ABCI v2][abci-v2].
+(announcement [here][comet-announcement]) and since then it diverged significantly by adopting modern features such as [PBTS][pbts] or [ABCI v2][abci-v2]. CometBFT provides [optimistic responsiveness][optimistic-responsive] guarantees.
 
-For protocol details, refer to the [CometBFT Specification](./spec/README.md).
+For protocol details, please take a look at the [CometBFT Specification](./spec/README.md).
 
-For detailed analysis of the Tendermint consensus protocol, including safety and liveness
+For a detailed analysis of the Tendermint consensus protocol, including safety and liveness
 proofs, read our paper, "[The latest gossip on BFT
 consensus](https://arxiv.org/abs/1807.04938)".
+
+For general links, including communications and announcements: [![Linktree][linktree-badge] linktr.ee/cometbft][linktree-url]
 
 ## Documentation
 
@@ -56,19 +59,25 @@ in order of preference:
 
 More on how releases are conducted can be found [here](./RELEASES.md).
 
+## Support Policy
+
+CometBFT aligns with other components of the [Interchain Stack](https://interchain.io/)
+and we offer long-term support (LTS) guarantees for certain releases. The
+complete End of Life (EOL) schedule, LTS plans, and the general support policy is
+in documented and regularly updated in the
+discussion [Support policy for CometBFT releases #590](https://github.com/cometbft/cometbft/discussions/590).
+
 ## Security
 
 Please see [SECURITY.md](./SECURITY.md).
 
 ## Minimum requirements
 
-| CometBFT version | Requirement | Version        | Tested with |
-|------------------|-------------|----------------|-------------|
-| main             | Go version  | 1.22 or higher | 1.22        |
-| v1.x             | Go version  | 1.22 or higher | 1.22        |
-| v0.38.x          | Go version  | 1.21 or higher | 1.22        |
-| v0.37.x          | Go version  | 1.20 or higher | 1.22        |
-| v0.34.x          | Go version  | 1.20 or higher | 1.20        |
+| CometBFT version | Requirement | Version        | Tested with  |
+|------------------|-------------|----------------|--------------|
+| main             | Go version  | 1.23 or higher | up to 1.23.6 |
+| v1.x             | Go version  | 1.23 or higher | up to 1.23.1 |
+| v0.38.x          | Go version  | 1.22 or higher | up to 1.22   |
 
 ### Install
 
@@ -77,7 +86,6 @@ See the [install guide](docs/tutorials/install.md).
 ### Quick Start
 
 - [Single node](docs/tutorials/quick-start.md)
-- [Local cluster using docker-compose](./docs/guides/networks/docker-compose.md)
 
 ## Contributing
 
@@ -132,10 +140,6 @@ Currently supported versions include:
   pre-releases.
 - v0.38.x: CometBFT v0.38 introduces ABCI 2.0, which implements the entirety of
   ABCI++
-- v0.37.x: CometBFT v0.37 introduces ABCI 1.0, which is the first major step
-  towards the full ABCI++ implementation in ABCI 2.0
-- v0.34.x: The CometBFT v0.34 series is compatible with the Tendermint Core
-  v0.34 series
 
 ## Resources
 
@@ -164,20 +168,18 @@ whitepapers, which CometBFT will continue to build on.
 
 ## Join us
 
-CometBFT is currently maintained by [Informal
-Systems](https://informal.systems). If you'd like to work full-time on CometBFT,
-[we're hiring](https://informal.systems/careers)!
+CometBFT is currently maintained by [Interchain Inc.](https://medium.com/the-interchain-foundation/cosmos-is-expanding-skip-joins-the-interchain-foundation-cfd346551dda). 
 
 Funding for CometBFT development comes primarily from the [Interchain
-Foundation](https://interchain.io), a Swiss non-profit. Informal Systems also
-maintains [cometbft.com](https://cometbft.com).
+Foundation](https://interchain.io), a Swiss non-profit.
 
 [bft]: https://en.wikipedia.org/wiki/Byzantine_fault_tolerance
 [smr]: https://en.wikipedia.org/wiki/State_machine_replication
+[optimistic-responsive]: https://informal.systems/blog/tendermint-responsiveness
 [Blockchain]: https://en.wikipedia.org/wiki/Blockchain
 [version-badge]: https://img.shields.io/github/v/release/cometbft/cometbft.svg
 [version-url]: https://github.com/cometbft/cometbft/releases/latest
-[api-badge]: https://camo.githubusercontent.com/915b7be44ada53c290eb157634330494ebe3e30a/68747470733a2f2f676f646f632e6f72672f6769746875622e636f6d2f676f6c616e672f6764646f3f7374617475732e737667
+[api-badge]: https://pkg.go.dev/badge/github.com/cometbft/cometbft.svg
 [api-url]: https://pkg.go.dev/github.com/cometbft/cometbft
 [go-badge]: https://img.shields.io/badge/go-1.21-blue.svg
 [go-url]: https://github.com/moovweb/gvm
@@ -203,11 +205,11 @@ maintains [cometbft.com](https://cometbft.com).
 [lint-badge-v038x]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml/badge.svg?branch=v0.38.x
 [lint-badge-v1x]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml/badge.svg?branch=v1.x
 [lint-url]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml
-[lint-url-v034x]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml?query=branch%3Av0.34.x
-[lint-url-v037x]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml?query=branch%3Av0.37.x
 [lint-url-v038x]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml?query=branch%3Av0.38.x
 [lint-url-v1x]: https://github.com/cometbft/cometbft/actions/workflows/lint.yml?query=branch%3Av1.x
 [tm-core]: https://github.com/tendermint/tendermint
 [pbts]: https://docs.cometbft.com/v1.0/explanation/core/proposer-based-timestamps
 [abci-v2]: https://docs.cometbft.com/v1.0/spec/abci/
 [comet-announcement]: https://informal.systems/blog/cosmos-meet-cometbft
+[linktree-url]: https://linktr.ee/cometbft
+[linktree-badge]: https://www.google.com/s2/favicons?domain=https://linktr.ee/
