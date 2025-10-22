@@ -18,7 +18,7 @@ RUN make build
 RUN cd test/e2e && make node
 
 # Stage 2: Final image - runtime environment with debugging support
-FROM golang:1.23 AS runtime
+FROM golang:1.24.9 AS runtime
 
 # Update system packages and install network utilities
 RUN apt-get -qq update -y && apt-get -qq upgrade -y >/dev/null
