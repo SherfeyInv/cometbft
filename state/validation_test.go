@@ -4,23 +4,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cometbft/cometbft/types/errors"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/v2/abci/types"
-	"github.com/cometbft/cometbft/v2/crypto/ed25519"
-	"github.com/cometbft/cometbft/v2/crypto/tmhash"
-	"github.com/cometbft/cometbft/v2/internal/test"
-	"github.com/cometbft/cometbft/v2/libs/log"
-	mpmocks "github.com/cometbft/cometbft/v2/mempool/mocks"
-	sm "github.com/cometbft/cometbft/v2/state"
-	"github.com/cometbft/cometbft/v2/state/mocks"
-	"github.com/cometbft/cometbft/v2/store"
-	"github.com/cometbft/cometbft/v2/types"
-	cmterrors "github.com/cometbft/cometbft/v2/types/errors"
-	cmttime "github.com/cometbft/cometbft/v2/types/time"
+
+	abci "github.com/cometbft/cometbft/abci/types"
+	"github.com/cometbft/cometbft/crypto/ed25519"
+	"github.com/cometbft/cometbft/crypto/tmhash"
+	"github.com/cometbft/cometbft/internal/test"
+	"github.com/cometbft/cometbft/libs/log"
+	mpmocks "github.com/cometbft/cometbft/mempool/mocks"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	sm "github.com/cometbft/cometbft/state"
+	"github.com/cometbft/cometbft/state/mocks"
+	"github.com/cometbft/cometbft/store"
+	"github.com/cometbft/cometbft/types"
+	cmttime "github.com/cometbft/cometbft/types/time"
 )
 
 const validationTestsStopHeight int64 = 10
@@ -30,18 +33,13 @@ func TestValidateBlockHeader(t *testing.T) {
 	require.NoError(t, proxyApp.Start())
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	cp := test.ConsensusParams()
-	pbtsEnableHeight := validationTestsStopHeight / 2
-	cp.Feature.PbtsEnableHeight = pbtsEnableHeight
-
-	state, stateDB, privVals := makeStateWithParams(3, 1, cp, chainID)
+	state, stateDB, privVals := makeState(3, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -80,14 +78,7 @@ func TestValidateBlockHeader(t *testing.T) {
 		{"Version wrong2", func(block *types.Block) { block.Version = wrongVersion2 }},
 		{"ChainID wrong", func(block *types.Block) { block.ChainID = "not-the-real-one" }},
 		{"Height wrong", func(block *types.Block) { block.Height += 10 }},
-		{"Time non-monotonic", func(block *types.Block) { block.Time = block.Time.Add(-2 * time.Second) }},
-		{"Time wrong", func(block *types.Block) {
-			if block.Height > 1 && block.Height < pbtsEnableHeight {
-				block.Time = block.Time.Add(time.Millisecond) // BFT Time
-			} else {
-				block.Time = time.Now() // not canonical
-			}
-		}},
+		{"Time wrong", func(block *types.Block) { block.Time = block.Time.Add(-time.Second * 1) }},
 
 		{"LastBlockID wrong", func(block *types.Block) { block.LastBlockID.PartSetHeader.Total += 10 }},
 		{"LastCommitHash wrong", func(block *types.Block) { block.LastCommitHash = wrongHash }},
@@ -110,9 +101,10 @@ func TestValidateBlockHeader(t *testing.T) {
 			Invalid blocks don't pass
 		*/
 		for _, tc := range testCases {
-			block := makeBlock(state, height, lastCommit)
+			block, err := makeBlock(state, height, lastCommit)
+			require.NoError(t, err)
 			tc.malleateBlock(block)
-			err := blockExec.ValidateBlock(state, block)
+			err = blockExec.ValidateBlock(state, block)
 			require.Error(t, err, tc.name)
 		}
 
@@ -127,9 +119,10 @@ func TestValidateBlockHeader(t *testing.T) {
 	}
 
 	nextHeight := validationTestsStopHeight
-	block := makeBlock(state, nextHeight, lastCommit)
+	block, err := makeBlock(state, nextHeight, lastCommit)
+	require.NoError(t, err)
 	state.InitialHeight = nextHeight + 1
-	err := blockExec.ValidateBlock(state, block)
+	err = blockExec.ValidateBlock(state, block)
 	require.Error(t, err, "expected an error when state is ahead of block")
 	assert.Contains(t, err.Error(), "lower than initial height")
 }
@@ -139,14 +132,13 @@ func TestValidateBlockCommit(t *testing.T) {
 	require.NoError(t, proxyApp.Start())
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, privVals := makeState(1, 1, chainID)
+	state, stateDB, privVals := makeState(1, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -188,7 +180,7 @@ func TestValidateBlockCommit(t *testing.T) {
 				0,
 				2,
 				state.LastBlockID,
-				cmttime.Now(),
+				time.Now(),
 			)
 			wrongHeightCommit := &types.Commit{
 				Height:     wrongHeightVote.Height,
@@ -196,22 +188,18 @@ func TestValidateBlockCommit(t *testing.T) {
 				BlockID:    state.LastBlockID,
 				Signatures: []types.CommitSig{wrongHeightVote.CommitSig()},
 			}
-			block := makeBlock(state, height, wrongHeightCommit)
-			err := blockExec.ValidateBlock(state, block)
-			_, isErrInvalidCommitHeight := err.(cmterrors.ErrInvalidCommitHeight)
+			block, err := makeBlock(state, height, wrongHeightCommit)
+			require.NoError(t, err)
+			err = blockExec.ValidateBlock(state, block)
+			_, isErrInvalidCommitHeight := err.(errors.ErrInvalidCommitHeight)
 			require.True(t, isErrInvalidCommitHeight, "expected ErrInvalidCommitHeight at height %d but got: %v", height, err)
 
 			/*
 				#2589: test len(block.LastCommit.Signatures) == state.LastValidators.Size()
 			*/
-			block = makeBlock(state, height, wrongSigsCommit)
-			err = blockExec.ValidateBlock(state, block)
-			_, isErrInvalidCommitSignatures := err.(cmterrors.ErrInvalidCommitSignatures)
-			require.True(t, isErrInvalidCommitSignatures,
-				"expected ErrInvalidCommitSignatures at height %d, but got: %v",
-				height,
-				err,
-			)
+			_, err = makeBlock(state, height, wrongSigsCommit)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "error making block")
 		}
 
 		/*
@@ -242,9 +230,9 @@ func TestValidateBlockCommit(t *testing.T) {
 			idx,
 			height,
 			0,
-			types.PrecommitType,
+			cmtproto.PrecommitType,
 			blockID,
-			cmttime.Now(),
+			time.Now(),
 		)
 
 		bpvPubKey, err := badPrivVal.GetPubKey()
@@ -256,16 +244,16 @@ func TestValidateBlockCommit(t *testing.T) {
 			Height:           height,
 			Round:            0,
 			Timestamp:        cmttime.Now(),
-			Type:             types.PrecommitType,
+			Type:             cmtproto.PrecommitType,
 			BlockID:          blockID,
 		}
 
 		g := goodVote.ToProto()
 		b := badVote.ToProto()
 
-		err = badPrivVal.SignVote(chainID, g, false)
+		err = badPrivVal.SignVote(chainID, g)
 		require.NoError(t, err, "height %d", height)
-		err = badPrivVal.SignVote(chainID, b, false)
+		err = badPrivVal.SignVote(chainID, b)
 		require.NoError(t, err, "height %d", height)
 
 		goodVote.Signature, badVote.Signature = g.Signature, b.Signature
@@ -284,7 +272,7 @@ func TestValidateBlockEvidence(t *testing.T) {
 	require.NoError(t, proxyApp.Start())
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, privVals := makeState(4, 1, chainID)
+	state, stateDB, privVals := makeState(4, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -299,7 +287,6 @@ func TestValidateBlockEvidence(t *testing.T) {
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -333,16 +320,17 @@ func TestValidateBlockEvidence(t *testing.T) {
 			var currentBytes int64
 			// more bytes than the maximum allowed for evidence
 			for currentBytes <= maxBytesEvidence {
-				newEv, err := types.NewMockDuplicateVoteEvidenceWithValidator(height, cmttime.Now(),
+				newEv, err := types.NewMockDuplicateVoteEvidenceWithValidator(height, time.Now(),
 					privVals[proposerAddr.String()], chainID)
 				require.NoError(t, err)
 				evidence = append(evidence, newEv)
 				currentBytes += int64(len(newEv.Bytes()))
 			}
-			block := state.MakeBlock(height, test.MakeNTxs(height, 10), lastCommit, evidence, proposerAddr)
+			block, err := state.MakeBlock(height, test.MakeNTxs(height, 10), lastCommit, evidence, proposerAddr)
+			require.NoError(t, err)
 
-			err := blockExec.ValidateBlock(state, block)
-			if assert.Error(t, err) { //nolint:testifylint // require.Error doesn't work with the conditional here
+			err = blockExec.ValidateBlock(state, block)
+			if assert.Error(t, err) {
 				_, ok := err.(*types.ErrEvidenceOverflow)
 				require.True(t, ok, "expected error to be of type ErrEvidenceOverflow at height %d but got %v", height, err)
 			}
@@ -377,5 +365,186 @@ func TestValidateBlockEvidence(t *testing.T) {
 		)
 		require.NoError(t, err, "height %d", height)
 		lastCommit = lastExtCommit.ToCommit()
+
 	}
+}
+
+func TestValidateBlockTime(t *testing.T) {
+	proxyApp := newTestApp()
+	require.NoError(t, proxyApp.Start())
+	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
+
+	state, stateDB, privVals := makeState(3, 1)
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
+		DiscardABCIResponses: false,
+	})
+	mp := &mpmocks.Mempool{}
+	mp.On("Lock").Return()
+	mp.On("Unlock").Return()
+	mp.On("FlushAppConn", mock.Anything).Return(nil)
+	mp.On("Update",
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+		mock.Anything).Return(nil)
+
+	blockStore := store.NewBlockStore(dbm.NewMemDB())
+
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mp,
+		sm.EmptyEvidencePool{},
+		blockStore,
+	)
+	lastCommit := &types.Commit{}
+	var lastExtCommit *types.ExtendedCommit
+
+	// Build up state for test
+	for height := int64(1); height < 3; height++ {
+		var err error
+		state, _, lastExtCommit, err = makeAndCommitGoodBlock(
+			state, height, lastCommit, state.Validators.GetProposer().Address, blockExec, privVals, nil)
+		require.NoError(t, err, "height %d", height)
+		lastCommit = lastExtCommit.ToCommit()
+	}
+
+	t.Run("block time before last block time", func(t *testing.T) {
+		height := int64(3)
+		block, err := makeBlock(state, height, lastCommit)
+		require.NoError(t, err)
+
+		// Set time to before last block time
+		block.Time = block.Time.Add(-time.Millisecond * 10)
+		err = blockExec.ValidateBlock(state, block)
+
+		require.ErrorContains(t, err, "not greater than last block time")
+	})
+
+	t.Run("block time after last block time, different than median time", func(t *testing.T) {
+		height := int64(3)
+		block, err := makeBlock(state, height, lastCommit)
+		require.NoError(t, err)
+		// Set time to after the median time
+		block.Time = block.Time.Add(time.Second)
+		err = blockExec.ValidateBlock(state, block)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid block time")
+	})
+
+	t.Run("block time after last block time, same as median time", func(t *testing.T) {
+		height := int64(3)
+		block, err := makeBlock(state, height, lastCommit)
+		require.NoError(t, err)
+		err = blockExec.ValidateBlock(state, block)
+		require.NoError(t, err)
+	})
+
+	t.Run("block time exceeds wall clock tolerance", func(t *testing.T) {
+		blockExecWithTol := sm.NewBlockExecutor(
+			stateStore,
+			log.TestingLogger(),
+			proxyApp.Consensus(),
+			mp,
+			sm.EmptyEvidencePool{},
+			blockStore,
+			sm.BlockExecutorWithBlockTimeTolerance(30*time.Second),
+		)
+		height := int64(3)
+		block, err := makeBlock(state, height, lastCommit)
+		require.NoError(t, err)
+		block.Time = time.Now().Add(1000 * time.Hour)
+		err = blockExecWithTol.ValidateBlock(state, block)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "too far in the future")
+	})
+
+	t.Run("tolerance not set still allows valid blocks", func(t *testing.T) {
+		blockExecNoTol := sm.NewBlockExecutor(
+			stateStore,
+			log.TestingLogger(),
+			proxyApp.Consensus(),
+			mp,
+			sm.EmptyEvidencePool{},
+			blockStore,
+		)
+		height := int64(3)
+		block, err := makeBlock(state, height, lastCommit)
+		require.NoError(t, err)
+		err = blockExecNoTol.ValidateBlock(state, block)
+		require.NoError(t, err)
+	})
+}
+
+func TestValidateBlockInvalidCommit(t *testing.T) {
+	proxyApp := newTestApp()
+	require.NoError(t, proxyApp.Start())
+	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
+
+	state, stateDB, privVals := makeState(3, 1)
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
+		DiscardABCIResponses: false,
+	})
+	mp := &mpmocks.Mempool{}
+	mp.On("Lock").Return()
+	mp.On("Unlock").Return()
+	mp.On("FlushAppConn", mock.Anything).Return(nil)
+	mp.On("Update",
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+		mock.Anything,
+		mock.Anything).Return(nil)
+
+	blockStore := store.NewBlockStore(dbm.NewMemDB())
+
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mp,
+		sm.EmptyEvidencePool{},
+		blockStore,
+	)
+	lastCommit := &types.Commit{}
+	var lastExtCommit *types.ExtendedCommit
+
+	// Build up state for test
+	for height := int64(1); height < 3; height++ {
+		var err error
+		state, _, lastExtCommit, err = makeAndCommitGoodBlock(
+			state, height, lastCommit, state.Validators.GetProposer().Address, blockExec, privVals, nil)
+		require.NoError(t, err, "height %d", height)
+		lastCommit = lastExtCommit.ToCommit()
+	}
+
+	t.Run("commit with unknown validator flagged as commit", func(t *testing.T) {
+		height := int64(3)
+
+		// Create a commit where only unknown validators have BlockIDFlagCommit
+		unknownVal := ed25519.GenPrivKey()
+		now := time.Now()
+
+		invalidCommit := &types.Commit{
+			Height:  height - 1,
+			Round:   0,
+			BlockID: state.LastBlockID,
+			Signatures: []types.CommitSig{
+				{
+					BlockIDFlag:      types.BlockIDFlagCommit,
+					ValidatorAddress: unknownVal.PubKey().Address(),
+					Timestamp:        now,
+					Signature:        []byte("dummy"),
+				},
+			},
+		}
+
+		_, err := makeBlock(state, height, invalidCommit)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "commit validator not found in validator set")
+	})
 }

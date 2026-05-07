@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
-	"github.com/cometbft/cometbft/v2/types"
+	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
+	"github.com/cometbft/cometbft/types"
 )
 
 // Benchmark is a simple function for fetching, calculating and printing
@@ -20,7 +20,7 @@ import (
 // 4. Min block interval (fastest block)
 //
 // Metrics are based of the `benchmarkLength`, the amount of consecutive blocks
-// sampled from in the testnet.
+// sampled from in the testnet
 func Benchmark(ctx context.Context, testnet *e2e.Testnet, benchmarkLength int64) error {
 	block, _, err := waitForHeight(ctx, testnet, 0)
 	if err != nil {
@@ -207,7 +207,7 @@ func extractTestnetStats(intervals []time.Duration) testnetStats {
 
 	for _, interval := range intervals {
 		diff := (interval - mean).Seconds()
-		std += math.Pow(diff, 2)
+		std += diff * diff
 	}
 	std = math.Sqrt(std / float64(len(intervals)))
 
@@ -217,11 +217,4 @@ func extractTestnetStats(intervals []time.Duration) testnetStats {
 		max:  max,
 		min:  min,
 	}
-}
-
-func min(a, b int64) int64 {
-	if a > b {
-		return b
-	}
-	return a
 }

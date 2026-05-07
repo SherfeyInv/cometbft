@@ -7,16 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cometbft/cometbft/v2/libs/bytes"
-	cmtjson "github.com/cometbft/cometbft/v2/libs/json"
-	"github.com/cometbft/cometbft/v2/libs/log"
-	cmtpubsub "github.com/cometbft/cometbft/v2/libs/pubsub"
-	"github.com/cometbft/cometbft/v2/libs/service"
-	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
-	rpcclient "github.com/cometbft/cometbft/v2/rpc/client"
-	ctypes "github.com/cometbft/cometbft/v2/rpc/core/types"
-	jsonrpcclient "github.com/cometbft/cometbft/v2/rpc/jsonrpc/client"
-	"github.com/cometbft/cometbft/v2/types"
+	"github.com/cometbft/cometbft/libs/bytes"
+	cmtjson "github.com/cometbft/cometbft/libs/json"
+	"github.com/cometbft/cometbft/libs/log"
+	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
+	"github.com/cometbft/cometbft/libs/service"
+	cmtsync "github.com/cometbft/cometbft/libs/sync"
+	rpcclient "github.com/cometbft/cometbft/rpc/client"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	jsonrpcclient "github.com/cometbft/cometbft/rpc/jsonrpc/client"
+	"github.com/cometbft/cometbft/types"
 )
 
 /*
@@ -39,7 +39,7 @@ the example for more details.
 
 Example:
 
-	c, err := New("http://192.168.1.10:26657/v1")
+	c, err := New("http://192.168.1.10:26657", "/websocket")
 	if err != nil {
 		// handle error
 	}
@@ -104,32 +104,33 @@ var (
 	_ rpcClient = (*baseRPCClient)(nil)
 )
 
-// -----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 // HTTP
 
-// New takes a remote endpoint in the form <protocol>://<host>:<port>. An error
-// is returned on invalid remote. The function panics when remote is nil.
-func New(remote string) (*HTTP, error) {
+// New takes a remote endpoint in the form <protocol>://<host>:<port> and
+// the websocket path (which always seems to be "/websocket")
+// An error is returned on invalid remote. The function panics when remote is nil.
+func New(remote, wsEndpoint string) (*HTTP, error) {
 	httpClient, err := jsonrpcclient.DefaultHTTPClient(remote)
 	if err != nil {
 		return nil, err
 	}
-	return NewWithClient(remote, httpClient)
+	return NewWithClient(remote, wsEndpoint, httpClient)
 }
 
-// Create timeout enabled http client.
-func NewWithTimeout(remote string, timeout uint) (*HTTP, error) {
+// Create timeout enabled http client
+func NewWithTimeout(remote, wsEndpoint string, timeout uint) (*HTTP, error) {
 	httpClient, err := jsonrpcclient.DefaultHTTPClient(remote)
 	if err != nil {
 		return nil, err
 	}
 	httpClient.Timeout = time.Duration(timeout) * time.Second
-	return NewWithClient(remote, httpClient)
+	return NewWithClient(remote, wsEndpoint, httpClient)
 }
 
-// NewWithClient allows for setting a custom http client (See New). An error is
-// returned on invalid remote. The function panics when remote is nil.
-func NewWithClient(remote string, client *http.Client) (*HTTP, error) {
+// NewWithClient allows for setting a custom http client (See New).
+// An error is returned on invalid remote. The function panics when remote is nil.
+func NewWithClient(remote, wsEndpoint string, client *http.Client) (*HTTP, error) {
 	if client == nil {
 		panic("nil http.Client provided")
 	}
@@ -139,7 +140,7 @@ func NewWithClient(remote string, client *http.Client) (*HTTP, error) {
 		return nil, err
 	}
 
-	wsEvents, err := newWSEvents(remote, "/websocket")
+	wsEvents, err := newWSEvents(remote, wsEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +178,7 @@ func (c *HTTP) NewBatch() *BatchHTTP {
 	}
 }
 
-// -----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 // BatchHTTP
 
 // Send is a convenience function for an HTTP batch that will trigger the
@@ -199,7 +200,7 @@ func (b *BatchHTTP) Count() int {
 	return b.rpcBatch.Count()
 }
 
-// -----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 // baseRPCClient
 
 func (c *baseRPCClient) Status(ctx context.Context) (*ctypes.ResultStatus, error) {
@@ -280,19 +281,6 @@ func (c *baseRPCClient) broadcastTX(
 ) (*ctypes.ResultBroadcastTx, error) {
 	result := new(ctypes.ResultBroadcastTx)
 	_, err := c.caller.Call(ctx, route, map[string]any{"tx": tx}, result)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func (c *baseRPCClient) UnconfirmedTx(
-	ctx context.Context,
-	hash []byte,
-) (*ctypes.ResultUnconfirmedTx, error) {
-	result := new(ctypes.ResultUnconfirmedTx)
-	params := map[string]any{"hash": hash}
-	_, err := c.caller.Call(ctx, "unconfirmed_tx", params, result)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +591,7 @@ func (c *baseRPCClient) BroadcastEvidence(
 	return result, nil
 }
 
-// -----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 // WSEvents
 
 var errNotRunning = errors.New("client is not running. Use .Start() method to start")

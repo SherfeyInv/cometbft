@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	blst "github.com/supranational/blst/bindings/go"
 
-	"github.com/cometbft/cometbft/v2/crypto"
-	"github.com/cometbft/cometbft/v2/crypto/bls12381"
+	"github.com/cometbft/cometbft/crypto"
+	"github.com/cometbft/cometbft/crypto/bls12381"
 )
 
 func TestNewPrivateKeyFromBytes(t *testing.T) {
@@ -25,7 +25,7 @@ func TestNewPrivateKeyFromBytes(t *testing.T) {
 	require.NoError(t, err)
 	defer privKey2.Zeroize()
 
-	assert.Equal(t, privKey, privKey2)
+	assert.True(t, privKey.Equals(privKey2))
 
 	_, err = bls12381.NewPrivateKeyFromBytes(crypto.CRandBytes(31))
 	assert.Error(t, err)
@@ -67,7 +67,7 @@ func TestPrivKeyBytes(t *testing.T) {
 	require.NoError(t, err)
 	defer privKey2.Zeroize()
 
-	assert.Equal(t, privKey, privKey2)
+	assert.True(t, privKey.Equals(privKey2))
 }
 
 func TestPrivKeyPubKey(t *testing.T) {
@@ -75,6 +75,16 @@ func TestPrivKeyPubKey(t *testing.T) {
 	require.NoError(t, err)
 	pubKey := privKey.PubKey()
 	assert.NotNil(t, pubKey)
+}
+
+func TestPrivKeyEquals(t *testing.T) {
+	privKey, err := bls12381.GenPrivKey()
+	require.NoError(t, err)
+	privKey2, err := bls12381.GenPrivKey()
+	require.NoError(t, err)
+
+	assert.True(t, privKey.Equals(privKey))
+	assert.False(t, privKey.Equals(privKey2))
 }
 
 func TestPrivKeyType(t *testing.T) {
@@ -118,6 +128,16 @@ func TestPubKey(t *testing.T) {
 	defer privKey.Zeroize()
 	pubKey := privKey.PubKey()
 	assert.NotNil(t, pubKey)
+}
+
+func TestPubKeyEquals(t *testing.T) {
+	privKey, err := bls12381.GenPrivKey()
+	require.NoError(t, err)
+	pubKey := privKey.PubKey()
+	pubKey2 := privKey.PubKey()
+
+	assert.True(t, pubKey.Equals(pubKey))
+	assert.True(t, pubKey.Equals(pubKey2))
 }
 
 func TestPubKeyType(t *testing.T) {

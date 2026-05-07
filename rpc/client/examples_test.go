@@ -7,30 +7,34 @@ import (
 	"log"
 	"strings"
 
-	"github.com/cometbft/cometbft/v2/abci/example/kvstore"
-	rpchttp "github.com/cometbft/cometbft/v2/rpc/client/http"
-	ctypes "github.com/cometbft/cometbft/v2/rpc/core/types"
-	"github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
-	rpctest "github.com/cometbft/cometbft/v2/rpc/test"
+	"github.com/cometbft/cometbft/abci/example/kvstore"
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	"github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	rpctest "github.com/cometbft/cometbft/rpc/test"
 )
 
 func ExampleHTTP_simple() {
 	// Start a CometBFT node (and kvstore) in the background to test against
 	app := kvstore.NewInMemoryApplication()
-	node := rpctest.StartCometBFT(app, rpctest.SuppressStdout, rpctest.RecreateConfig)
-	defer rpctest.StopCometBFT(node)
+	node := rpctest.StartTendermint(app, rpctest.SuppressStdout, rpctest.RecreateConfig)
+	defer rpctest.StopTendermint(node)
 
 	// Create our RPC client
 	rpcAddr := rpctest.GetConfig().RPC.ListenAddress
-	c, err := rpchttp.New(rpcAddr)
+	c, err := rpchttp.New(rpcAddr, "/websocket")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(err) //nolint:gocritic
 	}
 
 	// Create a transaction
 	k := []byte("name")
 	v := []byte("satoshi")
-	tx := append(k, append([]byte("="), v...)...)
+	tx := bytes.Join([][]byte{
+		k,
+		[]byte("="),
+		v,
+	}, nil)
 
 	// Broadcast the transaction and wait for it to commit (rather use
 	// c.BroadcastTxSync though in production).
@@ -70,25 +74,25 @@ func ExampleHTTP_simple() {
 func ExampleHTTP_batching() {
 	// Start a CometBFT node (and kvstore) in the background to test against
 	app := kvstore.NewInMemoryApplication()
-	node := rpctest.StartCometBFT(app, rpctest.SuppressStdout, rpctest.RecreateConfig)
+	node := rpctest.StartTendermint(app, rpctest.SuppressStdout, rpctest.RecreateConfig)
 
 	// Create our RPC client
 	rpcAddr := rpctest.GetConfig().RPC.ListenAddress
-	c, err := rpchttp.New(rpcAddr)
+	c, err := rpchttp.New(rpcAddr, "/websocket")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	defer rpctest.StopCometBFT(node)
+	defer rpctest.StopTendermint(node)
 
 	// Create our two transactions
 	k1 := []byte("firstName")
 	v1 := []byte("satoshi")
-	tx1 := append(k1, append([]byte("="), v1...)...)
+	tx1 := bytes.Join([][]byte{k1, []byte("="), v1}, nil)
 
 	k2 := []byte("lastName")
 	v2 := []byte("nakamoto")
-	tx2 := append(k2, append([]byte("="), v2...)...)
+	tx2 := bytes.Join([][]byte{k2, []byte("="), v2}, nil)
 
 	txs := [][]byte{tx1, tx2}
 
@@ -100,7 +104,7 @@ func ExampleHTTP_batching() {
 		// Broadcast the transaction and wait for it to commit (rather use
 		// c.BroadcastTxSync though in production).
 		if _, err := batch.BroadcastTxCommit(context.Background(), tx); err != nil {
-			log.Fatal(err)
+			log.Fatal(err) //nolint:gocritic
 		}
 	}
 
@@ -142,26 +146,26 @@ func ExampleHTTP_batching() {
 func ExampleHTTP_maxBatchSize() {
 	// Start a CometBFT node (and kvstore) in the background to test against
 	app := kvstore.NewInMemoryApplication()
-	node := rpctest.StartCometBFT(app, rpctest.RecreateConfig, rpctest.SuppressStdout, rpctest.MaxReqBatchSize)
+	node := rpctest.StartTendermint(app, rpctest.RecreateConfig, rpctest.SuppressStdout, rpctest.MaxReqBatchSize)
 
 	// Change the max_request_batch_size
 	node.Config().RPC.MaxRequestBatchSize = 2
 
 	// Create our RPC client
 	rpcAddr := rpctest.GetConfig().RPC.ListenAddress
-	c, err := rpchttp.New(rpcAddr)
+	c, err := rpchttp.New(rpcAddr, "/websocket")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	defer rpctest.StopCometBFT(node)
+	defer rpctest.StopTendermint(node)
 
 	// Create a new batch
 	batch := c.NewBatch()
 
 	for i := 1; i <= 5; i++ {
 		if _, err := batch.Health(context.Background()); err != nil {
-			log.Fatal(err)
+			log.Fatal(err) //nolint:gocritic
 		}
 	}
 

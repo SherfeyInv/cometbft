@@ -31,9 +31,6 @@
 //	        return subscription.Err()
 //	    }
 //	}
-//
-// Package pubsub may be internalized (made private) in future  releases.
-// XXX Deprecated.
 package pubsub
 
 import (
@@ -41,8 +38,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cometbft/cometbft/v2/libs/service"
-	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	"github.com/cometbft/cometbft/libs/service"
+	cmtsync "github.com/cometbft/cometbft/libs/sync"
 )
 
 type operation int
@@ -293,7 +290,7 @@ func (s *Server) OnStop() {
 	s.cmds <- cmd{op: shutdown}
 }
 
-// NOTE: not goroutine safe.
+// NOTE: not goroutine safe
 type state struct {
 	// query string -> client -> subscription
 	subscriptions map[string]map[string]*Subscription
@@ -317,8 +314,8 @@ func (s *Server) OnStart() error {
 	return nil
 }
 
-// OnReset implements Service.OnReset.
-func (*Server) OnReset() error {
+// OnReset implements Service.OnReset
+func (s *Server) OnReset() error {
 	return nil
 }
 

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cometbft/cometbft/v2/abci/types"
-	"github.com/cometbft/cometbft/v2/libs/pubsub/query/syntax"
+	"github.com/cometbft/cometbft/abci/types"
+	"github.com/cometbft/cometbft/libs/pubsub/query/syntax"
 )
 
 // All is a query that matches all events.
@@ -218,7 +218,7 @@ func compileCondition(cond syntax.Condition) (condition, error) {
 	return out, nil
 }
 
-// We use this regex to support queries of the from "8atom", "6.5stake",
+// We use this regex to support queries of the form "8atom", "6.5stake",
 // which are actively used in production.
 // The regex takes care of removing the non-number suffix.
 var extractNum = regexp.MustCompile(`^\d+(\.\d+)?`)

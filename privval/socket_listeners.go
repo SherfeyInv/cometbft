@@ -4,21 +4,21 @@ import (
 	"net"
 	"time"
 
-	"github.com/cometbft/cometbft/v2/crypto/ed25519"
-	p2pconn "github.com/cometbft/cometbft/v2/p2p/transport/tcp/conn"
+	"github.com/cometbft/cometbft/crypto/ed25519"
+	p2pconn "github.com/cometbft/cometbft/p2p/conn"
 )
 
 const (
 	defaultTimeoutAcceptSeconds = 3
 )
 
-// timeoutError can be used to check if an error returned from the netp package
+// timeoutError can be used to check if an error returned from the net package
 // was due to a timeout.
 type timeoutError interface {
 	Timeout() bool
 }
 
-// ------------------------------------------------------------------
+//------------------------------------------------------------------
 // TCP Listener
 
 // TCPListenerOption sets an optional parameter on the tcpListener.
@@ -78,13 +78,14 @@ func (ln *TCPListener) Accept() (net.Conn, error) {
 	timeoutConn := newTimeoutConn(tc, ln.timeoutReadWrite)
 	secretConn, err := p2pconn.MakeSecretConnection(timeoutConn, ln.secretConnKey)
 	if err != nil {
+		_ = timeoutConn.Close()
 		return nil, err
 	}
 
 	return secretConn, nil
 }
 
-// ------------------------------------------------------------------
+//------------------------------------------------------------------
 // Unix Listener
 
 // unixListener implements net.Listener.
@@ -145,7 +146,7 @@ func (ln *UnixListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-// ------------------------------------------------------------------
+//------------------------------------------------------------------
 // Connection
 
 // timeoutConn implements net.Conn.
@@ -169,9 +170,9 @@ func newTimeoutConn(conn net.Conn, timeout time.Duration) *timeoutConn {
 func (c timeoutConn) Read(b []byte) (n int, err error) {
 	// Reset deadline
 	deadline := time.Now().Add(c.timeout)
-	err = c.Conn.SetReadDeadline(deadline)
+	err = c.SetReadDeadline(deadline)
 	if err != nil {
-		return 0, err
+		return
 	}
 
 	return c.Conn.Read(b)
@@ -181,9 +182,9 @@ func (c timeoutConn) Read(b []byte) (n int, err error) {
 func (c timeoutConn) Write(b []byte) (n int, err error) {
 	// Reset deadline
 	deadline := time.Now().Add(c.timeout)
-	err = c.Conn.SetWriteDeadline(deadline)
+	err = c.SetWriteDeadline(deadline)
 	if err != nil {
-		return 0, err
+		return
 	}
 
 	return c.Conn.Write(b)

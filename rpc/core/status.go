@@ -3,16 +3,16 @@ package core
 import (
 	"time"
 
-	cmtbytes "github.com/cometbft/cometbft/v2/libs/bytes"
-	"github.com/cometbft/cometbft/v2/p2p"
-	ctypes "github.com/cometbft/cometbft/v2/rpc/core/types"
-	rpctypes "github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
-	"github.com/cometbft/cometbft/v2/types"
+	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
+	"github.com/cometbft/cometbft/p2p"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/types"
 )
 
 // Status returns CometBFT status including node info, pubkey, latest block
 // hash, app hash, block height and time.
-// More: https://docs.cometbft.com/main/rpc/#/Info/status
+// More: https://docs.cometbft.com/v0.38/spec/rpc/#status
 func (env *Environment) Status(*rpctypes.Context) (*ctypes.ResultStatus, error) {
 	var (
 		earliestBlockHeight   int64
@@ -51,8 +51,10 @@ func (env *Environment) Status(*rpctypes.Context) (*ctypes.ResultStatus, error) 
 		votingPower = val.VotingPower
 	}
 
-	result := &ctypes.ResultStatus{
-		NodeInfo: env.P2PTransport.NodeInfo().(p2p.NodeInfoDefault),
+	catchingUp := env.ConsensusReactor.WaitSync()
+
+	return &ctypes.ResultStatus{
+		NodeInfo: env.P2PTransport.NodeInfo().(p2p.DefaultNodeInfo),
 		SyncInfo: ctypes.SyncInfo{
 			LatestBlockHash:     latestBlockHash,
 			LatestAppHash:       latestAppHash,
@@ -62,16 +64,14 @@ func (env *Environment) Status(*rpctypes.Context) (*ctypes.ResultStatus, error) 
 			EarliestAppHash:     earliestAppHash,
 			EarliestBlockHeight: earliestBlockHeight,
 			EarliestBlockTime:   time.Unix(0, earliestBlockTimeNano),
-			CatchingUp:          env.ConsensusReactor.WaitSync(),
+			CatchingUp:          catchingUp,
 		},
 		ValidatorInfo: ctypes.ValidatorInfo{
 			Address:     env.PubKey.Address(),
 			PubKey:      env.PubKey,
 			VotingPower: votingPower,
 		},
-	}
-
-	return result, nil
+	}, nil
 }
 
 func (env *Environment) validatorAtHeight(h int64) *types.Validator {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cometbft/cometbft/v2/libs/log"
-	cmterrors "github.com/cometbft/cometbft/v2/types/errors"
+	"github.com/cometbft/cometbft/libs/log"
+	cmterrors "github.com/cometbft/cometbft/types/errors"
 )
 
 const (
@@ -61,18 +61,21 @@ func ParseLogLevel(lvl string, logger log.Logger, defaultLogLevelValue string) (
 				option = log.AllowDebugWith("module", module)
 			case "info":
 				option = log.AllowInfoWith("module", module)
+			case "warn":
+				option = log.AllowWarnWith("module", module)
 			case "error":
 				option = log.AllowErrorWith("module", module)
 			case "none":
 				option = log.AllowNoneWith("module", module)
 			default:
 				return nil,
-					fmt.Errorf("expected either \"info\", \"debug\", \"error\" or \"none\" log level, given %s (pair %s, list %s)",
+					fmt.Errorf("expected either \"debug\", \"info\", \"warn\", \"error\" or \"none\" log level, given %s (pair %s, list %s)",
 						level,
 						item,
 						list)
 			}
 			options = append(options, option)
+
 		}
 	}
 

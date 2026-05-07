@@ -3,7 +3,7 @@ package pubsub
 import (
 	"errors"
 
-	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
+	cmtsync "github.com/cometbft/cometbft/libs/sync"
 )
 
 var (
@@ -19,7 +19,7 @@ var (
 // consists of three things:
 // 1) channel onto which messages and events are published
 // 2) channel which is closed if a client is too slow or choose to unsubscribe
-// 3) err indicating the reason for (2).
+// 3) err indicating the reason for (2)
 type Subscription struct {
 	out chan Message
 

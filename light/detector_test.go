@@ -1,6 +1,7 @@
 package light_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -8,12 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	"github.com/cometbft/cometbft/v2/libs/log"
-	"github.com/cometbft/cometbft/v2/light"
-	"github.com/cometbft/cometbft/v2/light/provider"
-	mockp "github.com/cometbft/cometbft/v2/light/provider/mock"
-	dbs "github.com/cometbft/cometbft/v2/light/store/db"
-	"github.com/cometbft/cometbft/v2/types"
+
+	"github.com/cometbft/cometbft/libs/log"
+	"github.com/cometbft/cometbft/light"
+	"github.com/cometbft/cometbft/light/provider"
+	mockp "github.com/cometbft/cometbft/light/provider/mock"
+	dbs "github.com/cometbft/cometbft/light/store/db"
+	"github.com/cometbft/cometbft/types"
 )
 
 func TestLightClientAttackEvidence_Lunatic(t *testing.T) {
@@ -26,7 +28,7 @@ func TestLightClientAttackEvidence_Lunatic(t *testing.T) {
 		primaryValidators = make(map[int64]*types.ValidatorSet, latestHeight)
 	)
 
-	witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(latestHeight, valSize, 2, bTime)
+	witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(chainID, latestHeight, valSize, 2, bTime)
 	witness := mockp.New(chainID, witnessHeaders, witnessValidators)
 	forgedKeys := chainKeys[divergenceHeight-1].ChangeKeys(3) // we change 3 out of the 5 validators (still 2/5 remain)
 	forgedVals := forgedKeys.ToValidators(2, 0)
@@ -61,7 +63,7 @@ func TestLightClientAttackEvidence_Lunatic(t *testing.T) {
 
 	// Check verification returns an error.
 	_, err = c.VerifyLightBlockAtHeight(ctx, 10, bTime.Add(1*time.Hour))
-	if assert.Error(t, err) { //nolint:testifylint // require.Error doesn't work with the conditional here
+	if assert.Error(t, err) {
 		assert.Equal(t, light.ErrLightClientAttack, err)
 	}
 
@@ -106,7 +108,7 @@ func TestLightClientAttackEvidence_Equivocation(t *testing.T) {
 			primaryValidators = make(map[int64]*types.ValidatorSet, latestHeight)
 		)
 		// validators don't change in this network (however we still use a map just for convenience)
-		witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(latestHeight+2, valSize, 2, bTime)
+		witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(chainID, latestHeight+2, valSize, 2, bTime)
 		witness := mockp.New(chainID, witnessHeaders, witnessValidators)
 
 		for height := int64(1); height <= latestHeight; height++ {
@@ -144,7 +146,7 @@ func TestLightClientAttackEvidence_Equivocation(t *testing.T) {
 
 		// Check verification returns an error.
 		_, err = c.VerifyLightBlockAtHeight(ctx, 10, bTime.Add(1*time.Hour))
-		if assert.Error(t, err) { //nolint:testifylint // require.Error doesn't work with the conditional here
+		if assert.Error(t, err) {
 			assert.Equal(t, light.ErrLightClientAttack, err)
 		}
 
@@ -183,7 +185,7 @@ func TestLightClientAttackEvidence_ForwardLunatic(t *testing.T) {
 		primaryValidators = make(map[int64]*types.ValidatorSet, forgedHeight)
 	)
 
-	witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(latestHeight, valSize, 2, bTime)
+	witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(chainID, latestHeight, valSize, 2, bTime)
 
 	// primary has the exact same headers except it forges one extra header in the future using keys from 2/5ths of
 	// the validators
@@ -258,7 +260,7 @@ func TestLightClientAttackEvidence_ForwardLunatic(t *testing.T) {
 	// Now assert that verification returns an error. We craft the light clients time to be a little ahead of the chain
 	// to allow a window for the attack to manifest itself.
 	_, err = c.Update(ctx, bTime.Add(time.Duration(forgedHeight)*time.Minute))
-	if assert.Error(t, err) { //nolint:testifylint // require.Error doesn't work with the conditional here
+	if assert.Error(t, err) {
 		assert.Equal(t, light.ErrLightClientAttack, err)
 	}
 
@@ -275,7 +277,7 @@ func TestLightClientAttackEvidence_ForwardLunatic(t *testing.T) {
 	// We attempt the same call but now the supporting witness has a block which should
 	// immediately conflict in time with the primary
 	_, err = c.VerifyLightBlockAtHeight(ctx, forgedHeight, bTime.Add(time.Duration(forgedHeight)*time.Minute))
-	if assert.Error(t, err) { //nolint:testifylint // require.Error doesn't work with the conditional here
+	if assert.Error(t, err) {
 		assert.Equal(t, light.ErrLightClientAttack, err)
 	}
 	assert.True(t, witness.HasEvidence(evAgainstPrimary))
@@ -300,17 +302,17 @@ func TestLightClientAttackEvidence_ForwardLunatic(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.Update(ctx, bTime.Add(time.Duration(forgedHeight)*time.Minute))
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
 // 1. Different nodes therefore a divergent header is produced.
 // => light client returns an error upon creation because primary and witness
 // have a different view.
 func TestClientDivergentTraces1(t *testing.T) {
-	primary := mockp.New(genMockNode(10, 5, 2, bTime))
+	primary := mockp.New(genMockNode(chainID, 10, 5, 2, bTime))
 	firstBlock, err := primary.LightBlock(ctx, 1)
 	require.NoError(t, err)
-	witness := mockp.New(genMockNode(10, 5, 2, bTime))
+	witness := mockp.New(genMockNode(chainID, 10, 5, 2, bTime))
 
 	_, err = light.NewClient(
 		ctx,
@@ -331,9 +333,9 @@ func TestClientDivergentTraces1(t *testing.T) {
 }
 
 // 2. Two out of three nodes don't respond but the third has a header that matches
-// => verification should be successful and all the witnesses should remain.
+// => verification should be successful and all the witnesses should remain
 func TestClientDivergentTraces2(t *testing.T) {
-	primary := mockp.New(genMockNode(10, 5, 2, bTime))
+	primary := mockp.New(genMockNode(chainID, 10, 5, 2, bTime))
 	firstBlock, err := primary.LightBlock(ctx, 1)
 	require.NoError(t, err)
 	c, err := light.NewClient(
@@ -353,20 +355,20 @@ func TestClientDivergentTraces2(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.VerifyLightBlockAtHeight(ctx, 10, bTime.Add(1*time.Hour))
-	require.NoError(t, err)
-	assert.Len(t, c.Witnesses(), 3)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(c.Witnesses()))
 }
 
 // 3. witness has the same first header, but different second header
-// => creation should succeed, but the verification should fail.
+// => creation should succeed, but the verification should fail
 func TestClientDivergentTraces3(t *testing.T) {
-	_, primaryHeaders, primaryVals := genMockNode(10, 5, 2, bTime)
+	_, primaryHeaders, primaryVals := genMockNode(chainID, 10, 5, 2, bTime)
 	primary := mockp.New(chainID, primaryHeaders, primaryVals)
 
 	firstBlock, err := primary.LightBlock(ctx, 1)
 	require.NoError(t, err)
 
-	_, mockHeaders, mockVals := genMockNode(10, 5, 2, bTime)
+	_, mockHeaders, mockVals := genMockNode(chainID, 10, 5, 2, bTime)
 	mockHeaders[1] = primaryHeaders[1]
 	mockVals[1] = primaryVals[1]
 	witness := mockp.New(chainID, mockHeaders, mockVals)
@@ -388,20 +390,20 @@ func TestClientDivergentTraces3(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.VerifyLightBlockAtHeight(ctx, 10, bTime.Add(1*time.Hour))
-	require.Error(t, err)
-	assert.Len(t, c.Witnesses(), 1)
+	assert.Error(t, err)
+	assert.Equal(t, 1, len(c.Witnesses()))
 }
 
 // 4. Witness has a divergent header but can not produce a valid trace to back it up.
-// It should be ignored.
+// It should be ignored
 func TestClientDivergentTraces4(t *testing.T) {
-	_, primaryHeaders, primaryVals := genMockNode(10, 5, 2, bTime)
+	_, primaryHeaders, primaryVals := genMockNode(chainID, 10, 5, 2, bTime)
 	primary := mockp.New(chainID, primaryHeaders, primaryVals)
 
 	firstBlock, err := primary.LightBlock(ctx, 1)
 	require.NoError(t, err)
 
-	_, mockHeaders, mockVals := genMockNode(10, 5, 2, bTime)
+	_, mockHeaders, mockVals := genMockNode(chainID, 10, 5, 2, bTime)
 	witness := primary.Copy(chainID)
 	witness.AddLightBlock(&types.LightBlock{
 		SignedHeader: mockHeaders[10],
@@ -424,6 +426,125 @@ func TestClientDivergentTraces4(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.VerifyLightBlockAtHeight(ctx, 10, bTime.Add(1*time.Hour))
+	assert.Error(t, err)
+	assert.Equal(t, 1, len(c.Witnesses()))
+}
+
+func TestClientDivergentHeadersNoTraces(t *testing.T) {
+	primaryHeaders, primaryVals, primaryKeys := genMockNodeWithKeys(chainID, 10, 5, 2, bTime)
+	primary := mockp.New(chainID, primaryHeaders, primaryVals)
+
+	firstBlock, err := primary.LightBlock(ctx, 1)
+	require.NoError(t, err)
+
+	keysAtH10 := primaryKeys[10]
+	valsAtH10 := primaryVals[10]
+	nextValsAtH11 := primaryKeys[11].ToValidators(2, 0)
+
+	// generate a header with an app hash that diverges from the primary
+	makeDivergentHeader := func(appHashSeed string) *types.SignedHeader {
+		return keysAtH10.GenSignedHeader(
+			chainID, 10,
+			primaryHeaders[10].Time, nil,
+			valsAtH10, nextValsAtH11,
+			hash(appHashSeed), hash("cons_hash"), hash("results_hash"),
+			0, len(keysAtH10),
+		)
+	}
+	divergentHeader1 := makeDivergentHeader("divergent_app_1")
+	divergentHeader2 := makeDivergentHeader("divergent_app_2")
+	require.NotEqual(t, primaryHeaders[10].Hash(), divergentHeader1.Hash())
+	require.NotEqual(t, primaryHeaders[10].Hash(), divergentHeader2.Hash())
+
+	// generate a witness that has this divergent app hash but the same
+	// proposer priority hash
+	makeSparseWitness := func(divergent *types.SignedHeader) *mockp.Mock {
+		return mockp.New(
+			chainID,
+			map[int64]*types.SignedHeader{1: primaryHeaders[1], 10: divergent},
+			map[int64]*types.ValidatorSet{1: primaryVals[1], 10: valsAtH10},
+		)
+	}
+
+	// run for multiple iterations since this is exercising a race, 100
+	// typically causes it
+	const iterations = 100
+	for i := 0; i < iterations; i++ {
+		witness1 := makeSparseWitness(divergentHeader1)
+		witness2 := makeSparseWitness(divergentHeader2)
+
+		c, err := light.NewClient(
+			ctx,
+			chainID,
+			light.TrustOptions{
+				Height: 1,
+				Hash:   firstBlock.Hash(),
+				Period: 4 * time.Hour,
+			},
+			primary,
+			[]provider.Provider{witness1, witness2},
+			dbs.New(dbm.NewMemDB(), chainID),
+			light.Logger(log.TestingLogger()),
+		)
+		require.NoError(t, err)
+
+		// try and validate the block using our two witnesses that have
+		// diverged from the primary, this should error
+		_, err = c.VerifyLightBlockAtHeight(ctx, 10, bTime.Add(1*time.Hour))
+		require.Error(t, err)
+	}
+}
+
+func TestClientDivergentProposerPriorities(t *testing.T) {
+	const (
+		latestHeight = int64(10)
+		valSize      = 5
+	)
+
+	primaryHeaders, primaryValidators, _ := genMockNodeWithKeys(chainID, latestHeight, valSize, 2, bTime)
+	primary := mockp.New(chainID, primaryHeaders, primaryValidators)
+
+	witnessHeaders := make(map[int64]*types.SignedHeader, len(primaryHeaders))
+	witnessValidators := make(map[int64]*types.ValidatorSet, len(primaryValidators))
+	for height, header := range primaryHeaders {
+		witnessHeaders[height] = header
+	}
+	for height, valSet := range primaryValidators {
+		witnessValidators[height] = valSet
+	}
+
+	// Keep header hash identical while changing only proposer priorities in the validator set.
+	witnessValidators[latestHeight] = primaryValidators[latestHeight].CopyIncrementProposerPriority(1)
+	require.Equal(t, primaryHeaders[latestHeight].Hash(), witnessHeaders[latestHeight].Hash())
+	require.Equal(t, primaryValidators[latestHeight].Hash(), witnessValidators[latestHeight].Hash())
+	require.NotEqual(t,
+		primaryValidators[latestHeight].ProposerPriorityHash(),
+		witnessValidators[latestHeight].ProposerPriorityHash(),
+	)
+
+	witness := mockp.New(chainID, witnessHeaders, witnessValidators)
+	c, err := light.NewClient(
+		ctx,
+		chainID,
+		light.TrustOptions{
+			Period: 4 * time.Hour,
+			Height: 1,
+			Hash:   primaryHeaders[1].Hash(),
+		},
+		primary,
+		[]provider.Provider{witness},
+		dbs.New(dbm.NewMemDB(), chainID),
+		light.Logger(log.TestingLogger()),
+		light.MaxRetryAttempts(1),
+	)
+	require.NoError(t, err)
+
+	_, err = c.VerifyLightBlockAtHeight(ctx, latestHeight, bTime.Add(1*time.Hour))
 	require.Error(t, err)
-	assert.Len(t, c.Witnesses(), 1)
+
+	var divergeErr light.ErrProposerPrioritiesDiverge
+	require.True(t, errors.As(err, &divergeErr), "expected ErrProposerPrioritiesDiverge, got %T: %v", err, err)
+	assert.Equal(t, 0, divergeErr.WitnessIndex)
+	assert.Equal(t, primaryValidators[latestHeight].ProposerPriorityHash(), divergeErr.PrimaryHash)
+	assert.Equal(t, witnessValidators[latestHeight].ProposerPriorityHash(), divergeErr.WitnessHash)
 }

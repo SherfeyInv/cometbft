@@ -11,26 +11,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/cometbft/cometbft-db"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
-	cmtversion "github.com/cometbft/cometbft/api/cometbft/version/v1"
-	abciclientmocks "github.com/cometbft/cometbft/v2/abci/client/mocks"
-	abci "github.com/cometbft/cometbft/v2/abci/types"
-	abcimocks "github.com/cometbft/cometbft/v2/abci/types/mocks"
-	"github.com/cometbft/cometbft/v2/crypto"
-	"github.com/cometbft/cometbft/v2/crypto/ed25519"
-	"github.com/cometbft/cometbft/v2/crypto/secp256k1"
-	"github.com/cometbft/cometbft/v2/crypto/tmhash"
-	"github.com/cometbft/cometbft/v2/internal/test"
-	"github.com/cometbft/cometbft/v2/libs/log"
-	mpmocks "github.com/cometbft/cometbft/v2/mempool/mocks"
-	"github.com/cometbft/cometbft/v2/proxy"
-	pmocks "github.com/cometbft/cometbft/v2/proxy/mocks"
-	sm "github.com/cometbft/cometbft/v2/state"
-	"github.com/cometbft/cometbft/v2/state/mocks"
-	"github.com/cometbft/cometbft/v2/store"
-	"github.com/cometbft/cometbft/v2/types"
-	cmttime "github.com/cometbft/cometbft/v2/types/time"
-	"github.com/cometbft/cometbft/v2/version"
+
+	abciclientmocks "github.com/cometbft/cometbft/abci/client/mocks"
+	abci "github.com/cometbft/cometbft/abci/types"
+	abcimocks "github.com/cometbft/cometbft/abci/types/mocks"
+	"github.com/cometbft/cometbft/crypto"
+	"github.com/cometbft/cometbft/crypto/ed25519"
+	cryptoenc "github.com/cometbft/cometbft/crypto/encoding"
+	"github.com/cometbft/cometbft/crypto/tmhash"
+	"github.com/cometbft/cometbft/internal/test"
+	"github.com/cometbft/cometbft/libs/log"
+	mpmocks "github.com/cometbft/cometbft/mempool/mocks"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmtversion "github.com/cometbft/cometbft/proto/tendermint/version"
+	"github.com/cometbft/cometbft/proxy"
+	pmocks "github.com/cometbft/cometbft/proxy/mocks"
+	sm "github.com/cometbft/cometbft/state"
+	"github.com/cometbft/cometbft/state/mocks"
+	"github.com/cometbft/cometbft/store"
+	"github.com/cometbft/cometbft/types"
+	cmttime "github.com/cometbft/cometbft/types/time"
+	"github.com/cometbft/cometbft/version"
 )
 
 var (
@@ -43,10 +44,10 @@ func TestApplyBlock(t *testing.T) {
 	cc := proxy.NewLocalClientCreator(app)
 	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
 	err := proxyApp.Start()
-	require.NoError(t, err)
+	require.Nil(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, _ := makeState(1, 1, chainID)
+	state, stateDB, _ := makeState(1, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -55,7 +56,6 @@ func TestApplyBlock(t *testing.T) {
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -67,13 +67,14 @@ func TestApplyBlock(t *testing.T) {
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
 		mp, sm.EmptyEvidencePool{}, blockStore)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
 
-	state, err = blockExec.ApplyBlock(state, blockID, block, block.Height)
-	require.NoError(t, err)
+	state, err = blockExec.ApplyBlock(state, blockID, block)
+	require.Nil(t, err)
 
 	// TODO check state and mempool
 	assert.EqualValues(t, 1, state.Version.Consensus.App, "App version wasn't updated")
@@ -85,14 +86,14 @@ func TestApplyBlock(t *testing.T) {
 // block.
 func TestFinalizeBlockDecidedLastCommit(t *testing.T) {
 	app := &testApp{}
-	baseTime := cmttime.Now()
+	baseTime := time.Now()
 	cc := proxy.NewLocalClientCreator(app)
 	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
 	err := proxyApp.Start()
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, privVals := makeState(7, 1, chainID)
+	state, stateDB, privVals := makeState(7, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -117,7 +118,6 @@ func TestFinalizeBlockDecidedLastCommit(t *testing.T) {
 			mp := &mpmocks.Mempool{}
 			mp.On("Lock").Return()
 			mp.On("Unlock").Return()
-			mp.On("PreUpdate").Return()
 			mp.On("FlushAppConn", mock.Anything).Return(nil)
 			mp.On("Update",
 				mock.Anything,
@@ -142,11 +142,12 @@ func TestFinalizeBlockDecidedLastCommit(t *testing.T) {
 			}
 
 			// block for height 2
-			block := makeBlock(state, 2, lastCommit.ToCommit())
+			block, err := makeBlock(state, 2, lastCommit.ToCommit())
+			require.NoError(t, err)
 			bps, err := block.MakePartSet(testPartSize)
 			require.NoError(t, err)
 			blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
-			_, err = blockExec.ApplyBlock(state, blockID, block, block.Height)
+			_, err = blockExec.ApplyBlock(state, blockID, block)
 			require.NoError(t, err)
 			require.True(t, app.LastTime.After(baseTime))
 
@@ -168,7 +169,7 @@ func TestFinalizeBlockValidators(t *testing.T) {
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // no need to check error again
 
-	state, stateDB, _ := makeState(2, 2, chainID)
+	state, stateDB, _ := makeState(2, 2)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -222,9 +223,10 @@ func TestFinalizeBlockValidators(t *testing.T) {
 		}
 
 		// block for height 2
-		block := makeBlock(state, 2, lastCommit.ToCommit())
+		block, err := makeBlock(state, 2, lastCommit.ToCommit())
+		require.NoError(t, err)
 
-		_, err = sm.ExecCommitBlock(proxyApp.Consensus(), block, log.TestingLogger(), stateStore, 1, 2)
+		_, err = sm.ExecCommitBlock(proxyApp.Consensus(), block, log.TestingLogger(), stateStore, 1)
 		require.NoError(t, err, tc.desc)
 		require.True(t,
 			!tc.shouldHaveTime ||
@@ -237,10 +239,11 @@ func TestFinalizeBlockValidators(t *testing.T) {
 		for i, v := range app.CommitVotes {
 			if ctr < len(tc.expectedAbsentValidators) &&
 				tc.expectedAbsentValidators[ctr] == i {
-				assert.Equal(t, cmtproto.BlockIDFlagAbsent, v.BlockIdFlag)
+
+				assert.Equal(t, v.BlockIdFlag, cmtproto.BlockIDFlagAbsent)
 				ctr++
 			} else {
-				assert.NotEqual(t, cmtproto.BlockIDFlagAbsent, v.BlockIdFlag)
+				assert.NotEqual(t, v.BlockIdFlag, cmtproto.BlockIDFlagAbsent)
 			}
 		}
 	}
@@ -255,7 +258,7 @@ func TestFinalizeBlockMisbehavior(t *testing.T) {
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, privVals := makeState(1, 1, chainID)
+	state, stateDB, privVals := makeState(1, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -311,14 +314,14 @@ func TestFinalizeBlockMisbehavior(t *testing.T) {
 
 	abciMb := []abci.Misbehavior{
 		{
-			Type:             abci.MISBEHAVIOR_TYPE_DUPLICATE_VOTE,
+			Type:             abci.MisbehaviorType_DUPLICATE_VOTE,
 			Height:           3,
 			Time:             defaultEvidenceTime,
 			Validator:        types.TM2PB.Validator(state.Validators.Validators[0]),
 			TotalVotingPower: 10,
 		},
 		{
-			Type:             abci.MISBEHAVIOR_TYPE_LIGHT_CLIENT_ATTACK,
+			Type:             abci.MisbehaviorType_LIGHT_CLIENT_ATTACK,
 			Height:           8,
 			Time:             defaultEvidenceTime,
 			Validator:        types.TM2PB.Validator(state.Validators.Validators[0]),
@@ -333,7 +336,6 @@ func TestFinalizeBlockMisbehavior(t *testing.T) {
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -348,15 +350,16 @@ func TestFinalizeBlockMisbehavior(t *testing.T) {
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
 		mp, evpool, blockStore)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	block.Evidence = types.EvidenceData{Evidence: ev}
-	block.Header.EvidenceHash = block.Evidence.Hash()
+	block.EvidenceHash = block.Evidence.Hash()
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 
 	blockID = types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
 
-	_, err = blockExec.ApplyBlock(state, blockID, block, block.Height)
+	_, err = blockExec.ApplyBlock(state, blockID, block)
 	require.NoError(t, err)
 
 	// TODO check state and mempool
@@ -369,7 +372,7 @@ func TestProcessProposal(t *testing.T) {
 
 	logger := log.NewNopLogger()
 	app := &abcimocks.Application{}
-	app.On("ProcessProposal", mock.Anything, mock.Anything).Return(&abci.ProcessProposalResponse{Status: abci.PROCESS_PROPOSAL_STATUS_ACCEPT}, nil)
+	app.On("ProcessProposal", mock.Anything, mock.Anything).Return(&abci.ResponseProcessProposal{Status: abci.ResponseProcessProposal_ACCEPT}, nil)
 
 	cc := proxy.NewLocalClientCreator(app)
 	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
@@ -377,7 +380,7 @@ func TestProcessProposal(t *testing.T) {
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -395,7 +398,8 @@ func TestProcessProposal(t *testing.T) {
 		blockStore,
 	)
 
-	block0 := makeBlock(state, height-1, new(types.Commit))
+	block0, err := makeBlock(state, height-1, new(types.Commit))
+	require.NoError(t, err)
 	lastCommitSig := []types.CommitSig{}
 	partSet, err := block0.MakePartSet(types.BlockPartSizeBytes)
 	require.NoError(t, err)
@@ -405,7 +409,7 @@ func TestProcessProposal(t *testing.T) {
 		pk, err := privVal.GetPubKey()
 		require.NoError(t, err)
 		idx, _ := state.Validators.GetByAddress(pk.Address())
-		vote := types.MakeVoteNoError(t, privVal, block0.Header.ChainID, idx, height-1, 0, 2, blockID, cmttime.Now())
+		vote := types.MakeVoteNoError(t, privVal, block0.ChainID, idx, height-1, 0, 2, blockID, time.Now())
 		addr := pk.Address()
 		voteInfos = append(voteInfos,
 			abci.VoteInfo{
@@ -418,18 +422,19 @@ func TestProcessProposal(t *testing.T) {
 		lastCommitSig = append(lastCommitSig, vote.CommitSig())
 	}
 
-	block1 := makeBlock(state, height, &types.Commit{
+	block1, err := makeBlock(state, height, &types.Commit{
 		Height:     height - 1,
 		Signatures: lastCommitSig,
 	})
+	require.NoError(t, err)
 
 	block1.Txs = txs
 
-	expectedRpp := &abci.ProcessProposalRequest{
+	expectedRpp := &abci.RequestProcessProposal{
 		Txs:         block1.Txs.ToSliceOfBytes(),
 		Hash:        block1.Hash(),
-		Height:      block1.Header.Height,
-		Time:        block1.Header.Time,
+		Height:      block1.Height,
+		Time:        block1.Time,
 		Misbehavior: block1.Evidence.Evidence.ToABCI(),
 		ProposedLastCommit: abci.CommitInfo{
 			Round: 0,
@@ -448,7 +453,11 @@ func TestProcessProposal(t *testing.T) {
 
 func TestValidateValidatorUpdates(t *testing.T) {
 	pubkey1 := ed25519.GenPrivKey().PubKey()
-	pubkey2 := secp256k1.GenPrivKey().PubKey()
+	pubkey2 := ed25519.GenPrivKey().PubKey()
+	pk1, err := cryptoenc.PubKeyToProto(pubkey1)
+	assert.NoError(t, err)
+	pk2, err := cryptoenc.PubKeyToProto(pubkey2)
+	assert.NoError(t, err)
 
 	defaultValidatorParams := types.ValidatorParams{PubKeyTypes: []string{types.ABCIPubKeyTypeEd25519}}
 
@@ -462,59 +471,38 @@ func TestValidateValidatorUpdates(t *testing.T) {
 	}{
 		{
 			"adding a validator is OK",
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey1, 20)},
+			[]abci.ValidatorUpdate{{PubKey: pk2, Power: 20}},
 			defaultValidatorParams,
 			false,
 		},
 		{
-			"updating a validator with mixed key types is OK",
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey1, 20), abci.NewValidatorUpdate(pubkey2, 10)},
-			types.ValidatorParams{
-				PubKeyTypes: []string{
-					types.ABCIPubKeyTypeEd25519,
-					types.ABCIPubKeyTypeSecp256k1,
-				},
-			},
-			false,
-		},
-		{
-			"updating a validator with key type Secp256k1 is OK",
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey2, 20)},
-			types.ValidatorParams{
-				PubKeyTypes: []string{
-					types.ABCIPubKeyTypeEd25519,
-					types.ABCIPubKeyTypeSecp256k1,
-				},
-			},
+			"updating a validator is OK",
+			[]abci.ValidatorUpdate{{PubKey: pk1, Power: 20}},
+			defaultValidatorParams,
 			false,
 		},
 		{
 			"removing a validator is OK",
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey1, 0)},
+			[]abci.ValidatorUpdate{{PubKey: pk2, Power: 0}},
 			defaultValidatorParams,
 			false,
 		},
 		{
-			"adding a validator with negative power results in an error",
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey1, -100)},
+			"adding a validator with negative power results in error",
+			[]abci.ValidatorUpdate{{PubKey: pk2, Power: -100}},
 			defaultValidatorParams,
-			true,
-		},
-		{
-			"adding a validator with unsupported key type results in an error",
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey1, 20)},
-			types.ValidatorParams{PubKeyTypes: []string{types.ABCIPubKeyTypeSecp256k1}},
 			true,
 		},
 	}
 
 	for _, tc := range testCases {
+
 		t.Run(tc.name, func(t *testing.T) {
 			err := sm.ValidateValidatorUpdates(tc.abciUpdates, tc.validatorParams)
 			if tc.shouldErr {
-				require.Error(t, err)
+				assert.Error(t, err)
 			} else {
-				require.NoError(t, err)
+				assert.NoError(t, err)
 			}
 		})
 	}
@@ -523,8 +511,13 @@ func TestValidateValidatorUpdates(t *testing.T) {
 func TestUpdateValidators(t *testing.T) {
 	pubkey1 := ed25519.GenPrivKey().PubKey()
 	val1 := types.NewValidator(pubkey1, 10)
-	pubkey2 := secp256k1.GenPrivKey().PubKey()
+	pubkey2 := ed25519.GenPrivKey().PubKey()
 	val2 := types.NewValidator(pubkey2, 20)
+
+	pk, err := cryptoenc.PubKeyToProto(pubkey1)
+	require.NoError(t, err)
+	pk2, err := cryptoenc.PubKeyToProto(pubkey2)
+	require.NoError(t, err)
 
 	testCases := []struct {
 		name string
@@ -538,42 +531,43 @@ func TestUpdateValidators(t *testing.T) {
 		{
 			"adding a validator is OK",
 			types.NewValidatorSet([]*types.Validator{val1}),
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey2, 20)},
+			[]abci.ValidatorUpdate{{PubKey: pk2, Power: 20}},
 			types.NewValidatorSet([]*types.Validator{val1, val2}),
 			false,
 		},
 		{
 			"updating a validator is OK",
 			types.NewValidatorSet([]*types.Validator{val1}),
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey1, 20)},
+			[]abci.ValidatorUpdate{{PubKey: pk, Power: 20}},
 			types.NewValidatorSet([]*types.Validator{types.NewValidator(pubkey1, 20)}),
 			false,
 		},
 		{
 			"removing a validator is OK",
 			types.NewValidatorSet([]*types.Validator{val1, val2}),
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey2, 0)},
+			[]abci.ValidatorUpdate{{PubKey: pk2, Power: 0}},
 			types.NewValidatorSet([]*types.Validator{val1}),
 			false,
 		},
 		{
 			"removing a non-existing validator results in error",
 			types.NewValidatorSet([]*types.Validator{val1}),
-			[]abci.ValidatorUpdate{abci.NewValidatorUpdate(pubkey2, 0)},
+			[]abci.ValidatorUpdate{{PubKey: pk2, Power: 0}},
 			types.NewValidatorSet([]*types.Validator{val1}),
 			true,
 		},
 	}
 
 	for _, tc := range testCases {
+
 		t.Run(tc.name, func(t *testing.T) {
 			updates, err := types.PB2TM.ValidatorUpdates(tc.abciUpdates)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 			err = tc.currentSet.UpdateWithChangeSet(updates)
 			if tc.shouldErr {
-				require.Error(t, err)
+				assert.Error(t, err)
 			} else {
-				require.NoError(t, err)
+				assert.NoError(t, err)
 				require.Equal(t, tc.resultingSet.Size(), tc.currentSet.Size())
 
 				assert.Equal(t, tc.resultingSet.TotalVotingPower(), tc.currentSet.TotalVotingPower())
@@ -596,14 +590,13 @@ func TestFinalizeBlockValidatorUpdates(t *testing.T) {
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, _ := makeState(1, 1, chainID)
+	state, stateDB, _ := makeState(1, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -638,17 +631,20 @@ func TestFinalizeBlockValidatorUpdates(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
 
 	pubkey := ed25519.GenPrivKey().PubKey()
+	pk, err := cryptoenc.PubKeyToProto(pubkey)
+	require.NoError(t, err)
 	app.ValidatorUpdates = []abci.ValidatorUpdate{
-		abci.NewValidatorUpdate(pubkey, 10),
+		{PubKey: pk, Power: 10},
 	}
 
-	state, err = blockExec.ApplyBlock(state, blockID, block, block.Height)
+	state, err = blockExec.ApplyBlock(state, blockID, block)
 	require.NoError(t, err)
 	// test new validator was added to NextValidators
 	if assert.Equal(t, state.Validators.Size()+1, state.NextValidators.Size()) {
@@ -675,7 +671,7 @@ func TestFinalizeBlockValidatorUpdates(t *testing.T) {
 }
 
 // TestFinalizeBlockValidatorUpdatesResultingInEmptySet checks that processing validator updates that
-// would result in empty set causes no panic, an error is raised and NextValidators is not updated.
+// would result in empty set causes no panic, an error is raised and NextValidators is not updated
 func TestFinalizeBlockValidatorUpdatesResultingInEmptySet(t *testing.T) {
 	app := &testApp{}
 	cc := proxy.NewLocalClientCreator(app)
@@ -684,7 +680,7 @@ func TestFinalizeBlockValidatorUpdatesResultingInEmptySet(t *testing.T) {
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, _ := makeState(1, 1, chainID)
+	state, stateDB, _ := makeState(1, 1)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -698,27 +694,27 @@ func TestFinalizeBlockValidatorUpdatesResultingInEmptySet(t *testing.T) {
 		blockStore,
 	)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
 
-	pk := state.Validators.Validators[0].PubKey
+	vp, err := cryptoenc.PubKeyToProto(state.Validators.Validators[0].PubKey)
 	require.NoError(t, err)
 	// Remove the only validator
 	app.ValidatorUpdates = []abci.ValidatorUpdate{
-		abci.NewValidatorUpdate(pk, 0),
+		{PubKey: vp, Power: 0},
 	}
 
-	assert.NotPanics(t, func() { state, err = blockExec.ApplyBlock(state, blockID, block, block.Height) })
-	require.Error(t, err)
+	assert.NotPanics(t, func() { state, err = blockExec.ApplyBlock(state, blockID, block) })
+	assert.Error(t, err)
 	assert.NotEmpty(t, state.NextValidators.Validators)
 }
 
 func TestEmptyPrepareProposal(t *testing.T) {
 	const height = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	app := &abci.BaseApplication{}
 	cc := proxy.NewLocalClientCreator(app)
@@ -727,14 +723,13 @@ func TestEmptyPrepareProposal(t *testing.T) {
 	require.NoError(t, err)
 	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
 	mp := &mpmocks.Mempool{}
 	mp.On("Lock").Return()
 	mp.On("Unlock").Return()
-	mp.On("PreUpdate").Return()
 	mp.On("FlushAppConn", mock.Anything).Return(nil)
 	mp.On("Update",
 		mock.Anything,
@@ -755,7 +750,7 @@ func TestEmptyPrepareProposal(t *testing.T) {
 		blockStore,
 	)
 	pa, _ := state.Validators.GetByIndex(0)
-	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
+	commit, _, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 	_, err = blockExec.CreateProposalBlock(ctx, height, state, commit, pa)
 	require.NoError(t, err)
@@ -765,10 +760,9 @@ func TestEmptyPrepareProposal(t *testing.T) {
 // the prepare proposal response are included in the block.
 func TestPrepareProposalTxsAllIncluded(t *testing.T) {
 	const height = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -781,7 +775,7 @@ func TestPrepareProposalTxsAllIncluded(t *testing.T) {
 	mp.On("ReapMaxBytesMaxGas", mock.Anything, mock.Anything).Return(txs[2:])
 
 	app := &abcimocks.Application{}
-	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.PrepareProposalResponse{
+	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.ResponsePrepareProposal{
 		Txs: txs.ToSliceOfBytes(),
 	}, nil)
 	cc := proxy.NewLocalClientCreator(app)
@@ -800,12 +794,12 @@ func TestPrepareProposalTxsAllIncluded(t *testing.T) {
 		blockStore,
 	)
 	pa, _ := state.Validators.GetByIndex(0)
-	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
+	commit, _, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, pa)
 	require.NoError(t, err)
 
-	for i, tx := range block.Data.Txs {
+	for i, tx := range block.Txs {
 		require.Equal(t, txs[i], tx)
 	}
 
@@ -816,10 +810,9 @@ func TestPrepareProposalTxsAllIncluded(t *testing.T) {
 // in the order matching the order they are returned from PrepareProposal.
 func TestPrepareProposalReorderTxs(t *testing.T) {
 	const height = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -835,7 +828,7 @@ func TestPrepareProposalReorderTxs(t *testing.T) {
 	txs = append(txs[len(txs)/2:], txs[:len(txs)/2]...)
 
 	app := &abcimocks.Application{}
-	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.PrepareProposalResponse{
+	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.ResponsePrepareProposal{
 		Txs: txs.ToSliceOfBytes(),
 	}, nil)
 
@@ -855,11 +848,11 @@ func TestPrepareProposalReorderTxs(t *testing.T) {
 		blockStore,
 	)
 	pa, _ := state.Validators.GetByIndex(0)
-	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
+	commit, _, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, pa)
 	require.NoError(t, err)
-	for i, tx := range block.Data.Txs {
+	for i, tx := range block.Txs {
 		require.Equal(t, txs[i], tx)
 	}
 
@@ -870,10 +863,9 @@ func TestPrepareProposalReorderTxs(t *testing.T) {
 // an error if the ResponsePrepareProposal returned from the application is invalid.
 func TestPrepareProposalErrorOnTooManyTxs(t *testing.T) {
 	const height = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	// limit max block size
 	state.ConsensusParams.Block.MaxBytes = 60 * 1024
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
@@ -891,7 +883,7 @@ func TestPrepareProposalErrorOnTooManyTxs(t *testing.T) {
 	mp.On("ReapMaxBytesMaxGas", mock.Anything, mock.Anything).Return(txs)
 
 	app := &abcimocks.Application{}
-	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.PrepareProposalResponse{
+	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.ResponsePrepareProposal{
 		Txs: txs.ToSliceOfBytes(),
 	}, nil)
 
@@ -911,7 +903,7 @@ func TestPrepareProposalErrorOnTooManyTxs(t *testing.T) {
 		blockStore,
 	)
 	pa, _ := state.Validators.GetByIndex(0)
-	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
+	commit, _, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, pa)
 	require.Nil(t, block)
@@ -925,10 +917,9 @@ func TestPrepareProposalErrorOnTooManyTxs(t *testing.T) {
 // its size and will go beyond the limit upon serialization.
 func TestPrepareProposalCountSerializationOverhead(t *testing.T) {
 	const height = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	// limit max block size
 	var bytesPerTx int64 = 4
 	const nValidators = 1
@@ -948,7 +939,7 @@ func TestPrepareProposalCountSerializationOverhead(t *testing.T) {
 	mp.On("ReapMaxBytesMaxGas", mock.Anything, mock.Anything).Return(txs)
 
 	app := &abcimocks.Application{}
-	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.PrepareProposalResponse{
+	app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.ResponsePrepareProposal{
 		Txs: txs.ToSliceOfBytes(),
 	}, nil)
 
@@ -968,7 +959,7 @@ func TestPrepareProposalCountSerializationOverhead(t *testing.T) {
 		blockStore,
 	)
 	pa, _ := state.Validators.GetByIndex(0)
-	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
+	commit, _, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, pa)
 	require.Nil(t, block)
@@ -981,10 +972,9 @@ func TestPrepareProposalCountSerializationOverhead(t *testing.T) {
 // upon calling PrepareProposal on it.
 func TestPrepareProposalErrorOnPrepareProposalError(t *testing.T) {
 	const height = 2
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	state, stateDB, privVals := makeState(1, height, chainID)
+	state, stateDB, privVals := makeState(1, height)
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
@@ -1003,10 +993,7 @@ func TestPrepareProposalErrorOnPrepareProposalError(t *testing.T) {
 	cm.On("PrepareProposal", mock.Anything, mock.Anything).Return(nil, errors.New("an injected error")).Once()
 	cm.On("Stop").Return(nil)
 	cc := &pmocks.ClientCreator{}
-	cc.On("NewABCIQueryClient").Return(cm, nil)
-	cc.On("NewABCIMempoolClient").Return(cm, nil)
-	cc.On("NewABCISnapshotClient").Return(cm, nil)
-	cc.On("NewABCIConsensusClient").Return(cm, nil)
+	cc.On("NewABCIClient").Return(cm, nil)
 	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
 	err := proxyApp.Start()
 	require.NoError(t, err)
@@ -1022,7 +1009,7 @@ func TestPrepareProposalErrorOnPrepareProposalError(t *testing.T) {
 		blockStore,
 	)
 	pa, _ := state.Validators.GetByIndex(0)
-	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
+	commit, _, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, pa)
 	require.Nil(t, block)
@@ -1031,7 +1018,7 @@ func TestPrepareProposalErrorOnPrepareProposalError(t *testing.T) {
 	mp.AssertExpectations(t)
 }
 
-// TestCreateProposalAbsentVoteExtensions ensures that the CreateProposalBlock
+// TestCreateProposalBlockPanicOnAbsentVoteExtensions ensures that the CreateProposalBlock
 // call correctly panics when the vote extension data is missing from the extended commit
 // data that the method receives.
 func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
@@ -1047,47 +1034,46 @@ func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
 	}{
 		{
 			name:                  "missing extension data on first required height",
-			height:                2,
-			extensionEnableHeight: 1,
+			height:                3,
+			extensionEnableHeight: 2,
 			expectPanic:           true,
 		},
 		{
 			name:                  "missing extension during before required height",
-			height:                2,
-			extensionEnableHeight: 2,
+			height:                3,
+			extensionEnableHeight: 3,
 			expectPanic:           false,
 		},
 		{
 			name:                  "missing extension data and not required",
-			height:                2,
+			height:                3,
 			extensionEnableHeight: 0,
 			expectPanic:           false,
 		},
 		{
 			name:                  "missing extension data and required in two heights",
-			height:                2,
-			extensionEnableHeight: 3,
+			height:                3,
+			extensionEnableHeight: 4,
 			expectPanic:           false,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 
 			app := abcimocks.NewApplication(t)
 			if !testCase.expectPanic {
-				app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.PrepareProposalResponse{}, nil)
+				app.On("PrepareProposal", mock.Anything, mock.Anything).Return(&abci.ResponsePrepareProposal{}, nil)
 			}
 			cc := proxy.NewLocalClientCreator(app)
 			proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
 			err := proxyApp.Start()
 			require.NoError(t, err)
 
-			state, stateDB, privVals := makeState(1, int(testCase.height-1), chainID)
+			state, stateDB, privVals := makeState(1, int(testCase.height-1))
 			stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 				DiscardABCIResponses: false,
 			})
-			state.ConsensusParams.Feature.VoteExtensionsEnableHeight = testCase.extensionEnableHeight
+			state.ConsensusParams.ABCI.VoteExtensionsEnableHeight = testCase.extensionEnableHeight
 			mp := &mpmocks.Mempool{}
 			mp.On("Lock").Return()
 			mp.On("Unlock").Return()
@@ -1110,17 +1096,19 @@ func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
 				sm.EmptyEvidencePool{},
 				blockStore,
 			)
-			block := makeBlock(state, testCase.height, new(types.Commit))
+			block, err := makeBlock(state, testCase.height, new(types.Commit))
+			require.NoError(t, err)
 
 			bps, err := block.MakePartSet(testPartSize)
 			require.NoError(t, err)
 			blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
 			pa, _ := state.Validators.GetByIndex(0)
-			lastCommit, _ := makeValidCommit(testCase.height-1, blockID, state.Validators, privVals)
-			stripSignatures(lastCommit) // remove vote extensions and its signatures as required by test case
+			lastCommit, _, _ := makeValidCommit(testCase.height-1, blockID, state.Validators, privVals)
+			stripSignatures(lastCommit)
 			if testCase.expectPanic {
 				require.Panics(t, func() {
-					blockExec.CreateProposalBlock(ctx, testCase.height, state, lastCommit, pa) //nolint:errcheck
+					_, err := blockExec.CreateProposalBlock(ctx, testCase.height, state, lastCommit, pa)
+					require.NoError(t, err)
 				})
 			} else {
 				_, err = blockExec.CreateProposalBlock(ctx, testCase.height, state, lastCommit, pa)
@@ -1130,12 +1118,110 @@ func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
 	}
 }
 
+func newCachedBlockExec(t *testing.T, stateDB dbm.DB) *sm.BlockExecutor {
+	t.Helper()
+	app := &testApp{}
+	cc := proxy.NewLocalClientCreator(app)
+
+	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
+	require.NoError(t, proxyApp.Start())
+	t.Cleanup(func() { _ = proxyApp.Stop() })
+
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{DiscardABCIResponses: false})
+
+	mp := &mpmocks.Mempool{}
+	mp.On("Lock").Return()
+	mp.On("Unlock").Return()
+	mp.On("FlushAppConn", mock.Anything).Return(nil)
+	mp.On("Update",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return(nil)
+
+	return sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mp,
+		sm.EmptyEvidencePool{},
+		store.NewBlockStore(dbm.NewMemDB()),
+	)
+}
+
+func TestLastValidatedBlockCache(t *testing.T) {
+	// ARRANGE
+	// Given the state
+	state, stateDB, privVals := makeState(1, 1)
+	exec := newCachedBlockExec(t, stateDB)
+
+	// And nil last validated block
+	require.Nil(t, exec.GetLastValidatedBlock())
+
+	// Given first committed block
+	block1, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
+
+	// ACT #1: nil->block1
+	err = exec.ValidateBlock(state, block1)
+
+	// ASSERT #1
+	require.NoError(t, err)
+	require.Equal(t, block1, exec.GetLastValidatedBlock())
+
+	// ARRANGE #2
+	// Given state after first committed block
+	stateAfter1, _, lastCommit, err := makeAndCommitGoodBlock(
+		state,
+		1,
+		new(types.Commit),
+		state.NextValidators.Validators[0].Address,
+		exec,
+		privVals,
+		nil,
+	)
+	require.NoError(t, err)
+
+	// Given second committed block
+	block2, err := makeBlock(stateAfter1, 2, lastCommit.ToCommit())
+	require.NoError(t, err)
+
+	// ACT #2: block1->block2
+	err = exec.ValidateBlock(stateAfter1, block2)
+
+	// ASSERT
+	require.NoError(t, err)
+	require.Equal(t, block2, exec.GetLastValidatedBlock())
+
+	// ACT #3: block2->block1: noop
+	err = exec.ValidateBlock(state, block1)
+	require.NoError(t, err)
+
+	// not mutated!
+	require.Equal(t, block2, exec.GetLastValidatedBlock())
+}
+
+func TestValidateBlockCacheHeightAware(t *testing.T) {
+	state, stateDB, _ := makeState(1, 1)
+	exec := newCachedBlockExec(t, stateDB)
+
+	block1, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
+
+	require.NoError(t, exec.ValidateBlock(state, block1))
+	require.Equal(t, block1, exec.GetLastValidatedBlock())
+
+	// Advance state past block1 without touching the cache.
+	staleState := state
+	staleState.LastBlockHeight = 1
+
+	// block1's hash is cached but its height is no longer valid for staleState.
+	err = exec.ValidateBlock(staleState, block1)
+	require.Error(t, err)
+}
+
 func stripSignatures(ec *types.ExtendedCommit) {
 	for i, commitSig := range ec.ExtendedSignatures {
 		commitSig.Extension = nil
 		commitSig.ExtensionSignature = nil
-		commitSig.NonRpExtension = nil
-		commitSig.NonRpExtensionSignature = nil
 		ec.ExtendedSignatures[i] = commitSig
 	}
 }

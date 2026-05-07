@@ -1,6 +1,6 @@
 # Use a build arg to ensure that both stages use the same,
 # hopefully current, go version.
-ARG GOLANG_BASE_IMAGE=golang:1.23-alpine
+ARG GOLANG_BASE_IMAGE=golang:1.25-alpine3.22
 
 # stage 1 Generate CometBFT Binary
 FROM --platform=$BUILDPLATFORM $GOLANG_BASE_IMAGE AS builder
@@ -14,7 +14,6 @@ RUN TARGETPLATFORM=$TARGETPLATFORM make build-linux
 
 # stage 2
 FROM $GOLANG_BASE_IMAGE
-LABEL maintainer="hello@informal.systems"
 
 # CometBFT will be looking for the genesis file in /cometbft/config/genesis.json
 # (unless you change `genesis_file` in config.toml). You can put your config.toml and
@@ -49,7 +48,9 @@ COPY --from=builder /cometbft/build/cometbft /usr/bin/cometbft
 # You can overwrite these before the first run to influence
 # config.json and genesis.json. Additionally, you can override
 # CMD to add parameters to `cometbft node`.
-ENV PROXY_APP=kvstore MONIKER=dockernode CHAIN_ID=dockerchain
+ENV PROXY_APP=kvstore \
+    MONIKER=dockernode \
+    CHAIN_ID=dockerchain
 
 COPY ./DOCKER/docker-entrypoint.sh /usr/local/bin/
 

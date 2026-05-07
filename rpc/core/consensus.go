@@ -3,12 +3,12 @@ package core
 import (
 	"fmt"
 
-	cm "github.com/cometbft/cometbft/v2/internal/consensus"
-	cmtmath "github.com/cometbft/cometbft/v2/libs/math"
-	"github.com/cometbft/cometbft/v2/p2p"
-	ctypes "github.com/cometbft/cometbft/v2/rpc/core/types"
-	rpctypes "github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
-	"github.com/cometbft/cometbft/v2/types"
+	cm "github.com/cometbft/cometbft/consensus"
+	cmtmath "github.com/cometbft/cometbft/libs/math"
+	"github.com/cometbft/cometbft/p2p"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/types"
 )
 
 // Validators gets the validator set at the given block height.
@@ -17,7 +17,7 @@ import (
 // validators are sorted by their voting power - this is the canonical order
 // for the validators in the set as used in computing their Merkle root.
 //
-// More: https://docs.cometbft.com/main/rpc/#/Info/validators
+// More: https://docs.cometbft.com/v0.38/spec/rpc/#validators
 func (env *Environment) Validators(
 	_ *rpctypes.Context,
 	heightPtr *int64,
@@ -55,10 +55,10 @@ func (env *Environment) Validators(
 
 // DumpConsensusState dumps consensus state.
 // UNSTABLE
-// More: https://docs.cometbft.com/main/rpc/#/Info/dump_consensus_state
+// More: https://docs.cometbft.com/v0.38.x/rpc/#/Info/dump_consensus_state
 func (env *Environment) DumpConsensusState(*rpctypes.Context) (*ctypes.ResultDumpConsensusState, error) {
 	// Get Peer consensus states.
-	peerStates := make([]ctypes.PeerStateInfo, 0)
+	peerStates := make([]ctypes.PeerStateInfo, 0, env.P2PPeers.Peers().Size())
 	var err error
 	env.P2PPeers.Peers().ForEach(func(peer p2p.Peer) {
 		peerState, ok := peer.Get(types.PeerStateKey).(*cm.PeerState)
@@ -94,7 +94,7 @@ func (env *Environment) DumpConsensusState(*rpctypes.Context) (*ctypes.ResultDum
 
 // ConsensusState returns a concise summary of the consensus state.
 // UNSTABLE
-// More: https://docs.cometbft.com/main/rpc/#/Info/consensus_state
+// More: https://docs.cometbft.com/v0.38.x/rpc/#/Info/consensus_state
 func (env *Environment) GetConsensusState(*rpctypes.Context) (*ctypes.ResultConsensusState, error) {
 	// Get self round state.
 	bz, err := env.ConsensusState.GetRoundStateSimpleJSON()
@@ -103,7 +103,7 @@ func (env *Environment) GetConsensusState(*rpctypes.Context) (*ctypes.ResultCons
 
 // ConsensusParams gets the consensus parameters at the given block height.
 // If no height is provided, it will fetch the latest consensus params.
-// More: https://docs.cometbft.com/main/rpc/#/Info/consensus_params
+// More: https://docs.cometbft.com/v0.38/spec/rpc/#consensusparams
 func (env *Environment) ConsensusParams(
 	_ *rpctypes.Context,
 	heightPtr *int64,

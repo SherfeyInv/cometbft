@@ -1,8 +1,5 @@
 //go:build !deadlock
-// +build !deadlock
 
-// Package sync may be internalized (made private) in future  releases.
-// XXX Deprecated.
 package sync
 
 import "sync"

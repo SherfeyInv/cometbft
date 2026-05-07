@@ -3,17 +3,15 @@ package p2p
 import (
 	"net"
 
-	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
-	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
-	"github.com/cometbft/cometbft/v2/p2p/internal/nodekey"
+	cmtrand "github.com/cometbft/cometbft/libs/rand"
+	cmtsync "github.com/cometbft/cometbft/libs/sync"
 )
 
 // IPeerSet has a (immutable) subset of the methods of PeerSet.
 type IPeerSet interface {
 	// Has returns true if the set contains the peer referred to by this key.
 	Has(key ID) bool
-	// HasIP returns true if the set contains the peer referred to by this IP
-	HasIP(ip net.IP) bool
+
 	// Get returns the peer with the given key, or nil if not found.
 	Get(key ID) Peer
 	// Copy returns a copy of the peers list.
@@ -26,12 +24,12 @@ type IPeerSet interface {
 	Random() Peer
 }
 
-// -----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 
 // PeerSet is a special thread-safe structure for keeping a table of peers.
 type PeerSet struct {
 	mtx    cmtsync.Mutex
-	lookup map[nodekey.ID]*peerSetItem
+	lookup map[ID]*peerSetItem
 	list   []Peer
 }
 
@@ -43,7 +41,7 @@ type peerSetItem struct {
 // NewPeerSet creates a new peerSet with a list of initial capacity of 256 items.
 func NewPeerSet() *PeerSet {
 	return &PeerSet{
-		lookup: make(map[nodekey.ID]*peerSetItem),
+		lookup: make(map[ID]*peerSetItem),
 		list:   make([]Peer, 0, 256),
 	}
 }
@@ -147,6 +145,19 @@ func (ps *PeerSet) Size() int {
 	ps.mtx.Lock()
 	defer ps.mtx.Unlock()
 	return len(ps.list)
+}
+
+// List returns the list of peers in the peerSet (NOTE: this is not a copy,
+// modifying this slice will modify the underlying list of peers within this
+// peerSet).
+//
+// Deprecated: Function is not used anymore and remains for backwards
+// compatibility. It will be removed in a later release. Change to using Copy()
+// instead.
+func (ps *PeerSet) List() []Peer {
+	ps.mtx.Lock()
+	defer ps.mtx.Unlock()
+	return ps.list
 }
 
 // Copy returns the copy of the peers list.

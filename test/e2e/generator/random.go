@@ -21,9 +21,9 @@ import (
 // {"foo": 2, "bar": 6}
 // {"foo": 3, "bar": 4}
 // {"foo": 3, "bar": 5}
-// {"foo": 3, "bar": 6}.
+// {"foo": 3, "bar": 6}
 func combinations(items map[string][]any) []map[string]any {
-	keys := []string{}
+	var keys []string //nolint:prealloc
 	for key := range items {
 		keys = append(keys, key)
 	}
@@ -38,7 +38,7 @@ func combiner(head map[string]any, pending []string, items map[string][]any) []m
 	}
 	key, pending := pending[0], pending[1:]
 
-	result := []map[string]any{}
+	var result []map[string]any
 	for _, value := range items[key] {
 		path := map[string]any{}
 		maps.Copy(path, head)
@@ -72,7 +72,7 @@ func (pc probSetChoice) Choose(r *rand.Rand) []string {
 type uniformSetChoice []string
 
 func (usc uniformSetChoice) Choose(r *rand.Rand) []string {
-	choices := []string{}
+	var choices []string //nolint:prealloc
 	indexes := r.Perm(len(usc))
 	if len(indexes) > 1 {
 		indexes = indexes[:1+r.Intn(len(indexes)-1)]

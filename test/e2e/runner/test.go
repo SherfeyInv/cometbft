@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	e2e "github.com/cometbft/cometbft/v2/test/e2e/pkg"
-	"github.com/cometbft/cometbft/v2/test/e2e/pkg/exec"
+	e2e "github.com/cometbft/cometbft/test/e2e/pkg"
+	"github.com/cometbft/cometbft/test/e2e/pkg/exec"
 )
 
-// Test runs test cases under tests.
+// Test runs test cases under tests/
 func Test(testnet *e2e.Testnet, ifd *e2e.InfrastructureData) error {
+	logger.Info("Running tests in ./tests/...")
+
 	err := os.Setenv("E2E_MANIFEST", testnet.File)
-	if err != nil {
-		return err
-	}
-	err = os.Setenv("E2E_TESTNET_DIR", testnet.Dir)
 	if err != nil {
 		return err
 	}
@@ -30,7 +28,7 @@ func Test(testnet *e2e.Testnet, ifd *e2e.InfrastructureData) error {
 		return err
 	}
 
-	cmd := []string{"go", "test", "-tags", "bls12381,secp256k1eth", "-count", "1"}
+	cmd := []string{"go", "test", "-tags", "bls12381", "-count", "1"}
 	verbose := os.Getenv("VERBOSE")
 	if verbose == "1" {
 		cmd = append(cmd, "-v")

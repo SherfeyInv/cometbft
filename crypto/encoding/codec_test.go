@@ -6,19 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/v2/crypto"
-	"github.com/cometbft/cometbft/v2/crypto/bls12381"
-	"github.com/cometbft/cometbft/v2/crypto/ed25519"
-	"github.com/cometbft/cometbft/v2/crypto/secp256k1"
-	"github.com/cometbft/cometbft/v2/crypto/secp256k1eth"
+	"github.com/cometbft/cometbft/crypto/bls12381"
+	"github.com/cometbft/cometbft/crypto/ed25519"
+	"github.com/cometbft/cometbft/crypto/secp256k1"
 )
-
-type unsupportedPubKey struct{}
-
-func (unsupportedPubKey) Address() crypto.Address             { return nil }
-func (unsupportedPubKey) Bytes() []byte                       { return nil }
-func (unsupportedPubKey) VerifySignature([]byte, []byte) bool { return false }
-func (unsupportedPubKey) Type() string                        { return "unsupportedPubKey" }
 
 func TestPubKeyToFromProto(t *testing.T) {
 	// ed25519
@@ -45,23 +36,6 @@ func TestPubKeyToFromProto(t *testing.T) {
 	assert.Equal(t, pk.Address(), pubkey.Address())
 	assert.Equal(t, pk.VerifySignature([]byte("msg"), []byte("sig")), pubkey.VerifySignature([]byte("msg"), []byte("sig")))
 
-	// secp256k1eth
-	if secp256k1eth.Enabled {
-		pk = secp256k1eth.GenPrivKey().PubKey()
-		proto, err = PubKeyToProto(pk)
-		require.NoError(t, err)
-
-		pubkey, err = PubKeyFromProto(proto)
-		require.NoError(t, err)
-		assert.Equal(t, pk.Type(), pubkey.Type())
-		assert.Equal(t, pk.Bytes(), pubkey.Bytes())
-		assert.Equal(t, pk.Address(), pubkey.Address())
-		assert.Equal(t, pk.VerifySignature([]byte("msg"), []byte("sig")), pubkey.VerifySignature([]byte("msg"), []byte("sig")))
-	} else {
-		_, err = PubKeyToProto(secp256k1eth.PubKey{})
-		assert.Error(t, err)
-	}
-
 	// bls12381
 	if bls12381.Enabled {
 		privKey, err := bls12381.GenPrivKey()
@@ -81,11 +55,6 @@ func TestPubKeyToFromProto(t *testing.T) {
 		_, err = PubKeyToProto(bls12381.PubKey{})
 		assert.Error(t, err)
 	}
-
-	// unsupported key type
-	_, err = PubKeyToProto(unsupportedPubKey{})
-	require.Error(t, err)
-	assert.Equal(t, ErrUnsupportedKey{KeyType: unsupportedPubKey{}.Type()}, err)
 }
 
 func TestPubKeyFromTypeAndBytes(t *testing.T) {
@@ -110,24 +79,6 @@ func TestPubKeyFromTypeAndBytes(t *testing.T) {
 	assert.Equal(t, pk.Bytes(), pubkey.Bytes())
 	assert.Equal(t, pk.Address(), pubkey.Address())
 	assert.Equal(t, pk.VerifySignature([]byte("msg"), []byte("sig")), pubkey.VerifySignature([]byte("msg"), []byte("sig")))
-
-	// secp256k1 invalid size
-	_, err = PubKeyFromTypeAndBytes(pk.Type(), pk.Bytes()[:10])
-	assert.Error(t, err)
-
-	// secp256k1eth
-	if secp256k1eth.Enabled {
-		pk = secp256k1eth.GenPrivKey().PubKey()
-		pubkey, err = PubKeyFromTypeAndBytes(pk.Type(), pk.Bytes())
-		assert.NoError(t, err)
-		assert.Equal(t, pk.Type(), pubkey.Type())
-		assert.Equal(t, pk.Bytes(), pubkey.Bytes())
-		assert.Equal(t, pk.Address(), pubkey.Address())
-		assert.Equal(t, pk.VerifySignature([]byte("msg"), []byte("sig")), pubkey.VerifySignature([]byte("msg"), []byte("sig")))
-	} else {
-		_, err = PubKeyFromTypeAndBytes(secp256k1eth.KeyType, []byte{})
-		assert.Error(t, err)
-	}
 
 	// secp256k1 invalid size
 	_, err = PubKeyFromTypeAndBytes(pk.Type(), pk.Bytes()[:10])

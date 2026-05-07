@@ -7,29 +7,15 @@ import (
 	"strconv"
 	"strings"
 
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
-	"github.com/cometbft/cometbft/v2/crypto"
-	ce "github.com/cometbft/cometbft/v2/crypto/encoding"
-	"github.com/cometbft/cometbft/v2/internal/keytypes"
-	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/crypto"
+	ce "github.com/cometbft/cometbft/crypto/encoding"
+	cmtrand "github.com/cometbft/cometbft/libs/rand"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 )
-
-// ErrUnsupportedPubKeyType is returned when a public key type is not supported.
-type ErrUnsupportedPubKeyType struct {
-	KeyType string
-}
-
-func (e ErrUnsupportedPubKeyType) Error() string {
-	return fmt.Sprintf(
-		"unsupported pubkey type %q, must be one of: %s",
-		e.KeyType,
-		keytypes.SupportedKeyTypesStr(),
-	)
-}
 
 // Volatile state for each Validator
 // NOTE: The ProposerPriority is not included in Validator.Hash();
-// make sure to update that method if changes are made here.
+// make sure to update that method if changes are made here
 type Validator struct {
 	Address     Address       `json:"address"`
 	PubKey      crypto.PubKey `json:"pub_key"`
@@ -66,11 +52,6 @@ func (v *Validator) ValidateBasic() error {
 		return fmt.Errorf("validator address is incorrectly derived from pubkey. Exp: %v, got %v", addr, v.Address)
 	}
 
-	keyType := v.PubKey.Type()
-	if !keytypes.IsSupported(keyType) {
-		return ErrUnsupportedPubKeyType{KeyType: keyType}
-	}
-
 	return nil
 }
 
@@ -104,12 +85,12 @@ func (v *Validator) CompareProposerPriority(other *Validator) *Validator {
 	}
 }
 
-// String returns a string representation of String.
+// String returns a string representation of Validator.
 //
 // 1. address
 // 2. public key
 // 3. voting power
-// 4. proposer priority.
+// 4. proposer priority
 func (v *Validator) String() string {
 	if v == nil {
 		return "nil-Validator"
@@ -136,7 +117,7 @@ func ValidatorListString(vals []*Validator) string {
 }
 
 // Bytes computes the unique encoding of a validator with a given voting power.
-// These are the bytes that gets hashed in consensus. It excludes address
+// These are the bytes that get hashed in consensus. It excludes address
 // as its redundant with the pubkey. This also excludes ProposerPriority
 // which changes every round.
 func (v *Validator) Bytes() []byte {
@@ -157,20 +138,20 @@ func (v *Validator) Bytes() []byte {
 	return bz
 }
 
-// ToProto converts Validator to protobuf.
+// ToProto converts Validator to protobuf
 func (v *Validator) ToProto() (*cmtproto.Validator, error) {
 	if v == nil {
 		return nil, errors.New("nil validator")
 	}
 
-	if v.PubKey == nil {
-		return nil, errors.New("nil pubkey")
+	pk, err := ce.PubKeyToProto(v.PubKey)
+	if err != nil {
+		return nil, err
 	}
 
 	vp := cmtproto.Validator{
 		Address:          v.Address,
-		PubKeyType:       v.PubKey.Type(),
-		PubKeyBytes:      v.PubKey.Bytes(),
+		PubKey:           pk,
 		VotingPower:      v.VotingPower,
 		ProposerPriority: v.ProposerPriority,
 	}
@@ -185,12 +166,9 @@ func ValidatorFromProto(vp *cmtproto.Validator) (*Validator, error) {
 		return nil, errors.New("nil validator")
 	}
 
-	pk, err := ce.PubKeyFromTypeAndBytes(vp.PubKeyType, vp.PubKeyBytes)
+	pk, err := ce.PubKeyFromProto(vp.PubKey)
 	if err != nil {
-		pk, err = ce.PubKeyFromProto(*vp.PubKey)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	v := new(Validator)
 	v.Address = vp.GetAddress()
@@ -201,11 +179,11 @@ func ValidatorFromProto(vp *cmtproto.Validator) (*Validator, error) {
 	return v, nil
 }
 
-// ----------------------------------------
+//----------------------------------------
 // RandValidator
 
 // RandValidator returns a randomized validator, useful for testing.
-// UNSTABLE.
+// UNSTABLE
 func RandValidator(randPower bool, minPower int64) (*Validator, PrivValidator) {
 	privVal := NewMockPV()
 	votePower := minPower

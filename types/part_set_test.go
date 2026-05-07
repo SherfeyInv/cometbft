@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/v2/crypto/merkle"
-	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
+	"github.com/cometbft/cometbft/crypto/merkle"
+	cmtrand "github.com/cometbft/cometbft/libs/rand"
 )
 
 const (
@@ -29,7 +29,6 @@ func TestBasicPartSet(t *testing.T) {
 	assert.True(t, partSet.IsComplete())
 	assert.EqualValues(t, nParts, partSet.Count())
 	assert.EqualValues(t, testPartSize*nParts, partSet.ByteSize())
-	assert.False(t, partSet.IsLocked())
 
 	// Test adding parts to a new partSet.
 	partSet2 := NewPartSetFromHeader(partSet.Header())
@@ -46,17 +45,16 @@ func TestBasicPartSet(t *testing.T) {
 	// adding part with invalid index
 	added, err := partSet2.AddPart(&Part{Index: 10000})
 	assert.False(t, added)
-	require.Error(t, err)
+	assert.Error(t, err)
 	// adding existing part
 	added, err = partSet2.AddPart(partSet2.GetPart(0))
 	assert.False(t, added)
-	require.NoError(t, err)
+	assert.Nil(t, err)
 
 	assert.Equal(t, partSet.Hash(), partSet2.Hash())
 	assert.EqualValues(t, nParts, partSet2.Total())
 	assert.EqualValues(t, nParts*testPartSize, partSet.ByteSize())
 	assert.True(t, partSet2.IsComplete())
-	assert.False(t, partSet2.IsLocked())
 
 	// Reconstruct data, assert that they are equal.
 	data2Reader := partSet2.GetReader()
@@ -64,16 +62,6 @@ func TestBasicPartSet(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, data, data2)
-
-	// Test locking
-	partSet2.Lock()
-	assert.True(t, partSet2.IsLocked())
-	partSet2.Lock()
-	assert.True(t, partSet2.IsLocked())
-	partSet2.Unlock()
-	assert.False(t, partSet2.IsLocked())
-	partSet2.Unlock()
-	assert.False(t, partSet2.IsLocked())
 }
 
 func TestWrongProof(t *testing.T) {
@@ -123,7 +111,7 @@ func TestPartSetHeaderValidateBasic(t *testing.T) {
 		malleatePartSetHeader func(*PartSetHeader)
 		expectErr             bool
 	}{
-		{"Good PartSet", func(_ *PartSetHeader) {}, false},
+		{"Good PartSet", func(psHeader *PartSetHeader) {}, false},
 		{"Invalid Hash", func(psHeader *PartSetHeader) { psHeader.Hash = make([]byte, 1) }, true},
 	}
 	for _, tc := range testCases {
@@ -143,7 +131,7 @@ func TestPart_ValidateBasic(t *testing.T) {
 		malleatePart func(*Part)
 		expectErr    bool
 	}{
-		{"Good Part", func(_ *Part) {}, false},
+		{"Good Part", func(pt *Part) {}, false},
 		{"Too big part", func(pt *Part) { pt.Bytes = make([]byte, BlockPartSizeBytes+1) }, true},
 		{"Good small last part", func(pt *Part) {
 			pt.Index = 1

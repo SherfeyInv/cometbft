@@ -13,11 +13,11 @@ import (
 	"github.com/gorilla/websocket"
 	metrics "github.com/rcrowley/go-metrics"
 
-	cmtrand "github.com/cometbft/cometbft/v2/internal/rand"
-	"github.com/cometbft/cometbft/v2/libs/log"
-	"github.com/cometbft/cometbft/v2/libs/service"
-	cmtsync "github.com/cometbft/cometbft/v2/libs/sync"
-	"github.com/cometbft/cometbft/v2/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/libs/log"
+	cmtrand "github.com/cometbft/cometbft/libs/rand"
+	"github.com/cometbft/cometbft/libs/service"
+	cmtsync "github.com/cometbft/cometbft/libs/sync"
+	types "github.com/cometbft/cometbft/rpc/jsonrpc/types"
 )
 
 const (
@@ -108,7 +108,7 @@ func NewWS(remoteAddr, endpoint string, options ...func(*WSClient)) (*WSClient, 
 		password, _ = parsedURL.User.Password()
 	}
 
-	dialFn, err := MakeHTTPDialer(remoteAddr)
+	dialFn, err := makeHTTPDialer(remoteAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +317,7 @@ func (c *WSClient) reconnect() error {
 		time.Sleep(backoffDuration)
 
 		err := c.dial()
-		if err != nil { //nolint:revive // this is a false positive from early-return
+		if err != nil {
 			c.Logger.Error("failed to redial", "err", err)
 		} else {
 			c.Logger.Info("reconnected")

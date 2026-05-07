@@ -7,9 +7,9 @@ import (
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/stretchr/testify/require"
 
-	ssproto "github.com/cometbft/cometbft/api/cometbft/statesync/v1"
-	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v2"
-	"github.com/cometbft/cometbft/v2/types"
+	"github.com/cometbft/cometbft/p2p"
+	ssproto "github.com/cometbft/cometbft/proto/tendermint/statesync"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 )
 
 func TestValidateMsg(t *testing.T) {
@@ -84,10 +84,15 @@ func TestValidateMsg(t *testing.T) {
 			&ssproto.SnapshotsResponse{Height: 1, Format: 1, Chunks: 2, Hash: []byte{}},
 			false,
 		},
+		"SnapshotsResponse exceeds max chunks": {
+			&ssproto.SnapshotsResponse{Height: 1, Format: 1, Chunks: 100001, Hash: []byte{1}},
+			false,
+		},
 	}
 	for name, tc := range testcases {
+
 		t.Run(name, func(t *testing.T) {
-			err := validateMsg(tc.msg)
+			err := validateMsg(tc.msg, 100000)
 			if tc.valid {
 				require.NoError(t, err)
 			} else {
@@ -111,7 +116,8 @@ func TestStateSyncVectors(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		w := tc.msg.(types.Wrapper).Wrap()
+
+		w := tc.msg.(p2p.Wrapper).Wrap()
 		bz, err := proto.Marshal(w)
 		require.NoError(t, err)
 

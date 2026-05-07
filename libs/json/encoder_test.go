@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cometbft/cometbft/v2/libs/json"
+	"github.com/cometbft/cometbft/libs/json"
 )
 
 func TestMarshal(t *testing.T) {
@@ -94,6 +94,7 @@ func TestMarshal(t *testing.T) {
 		},
 	}
 	for name, tc := range testcases {
+
 		t.Run(name, func(t *testing.T) {
 			bz, err := json.Marshal(tc.value)
 			require.NoError(t, err)

@@ -3,7 +3,7 @@ package server
 import (
 	"fmt"
 
-	"github.com/cometbft/cometbft/v2/abci/types"
+	"github.com/cometbft/cometbft/abci/types"
 )
 
 // ErrUnknownServerType is returned when trying to create a server with invalid transport option.
@@ -12,10 +12,10 @@ type ErrUnknownServerType struct {
 }
 
 func (e ErrUnknownServerType) Error() string {
-	return "unknown server type " + e.ServerType
+	return fmt.Sprintf("unknown server type %s", e.ServerType)
 }
 
-// ErrConnectionDoesNotExist is returned when trying to access non-existent network connection.
+// ErrConnectionDoesNotExist is returned when trying to access non-existent network connection
 type ErrConnectionDoesNotExist struct {
 	ConnID int
 }

@@ -4,13 +4,13 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/cometbft/cometbft/v2/libs/pubsub/query/syntax"
-	"github.com/cometbft/cometbft/v2/types"
+	"github.com/cometbft/cometbft/libs/pubsub/query/syntax"
+	"github.com/cometbft/cometbft/types"
 )
 
 // QueryRanges defines a mapping between a composite event key and a QueryRange.
 //
-// e.g.account.number => queryRange{lowerBound: 1, upperBound: 5}.
+// e.g.account.number => queryRange{lowerBound: 1, upperBound: 5}
 type QueryRanges map[string]QueryRange
 
 // QueryRange defines a range within a query condition.
@@ -144,7 +144,7 @@ func LookForRangesWithHeight(conditions []syntax.Condition) (queryRange QueryRan
 	return queryRange, indexes, heightRange
 }
 
-// Deprecated: This function is not used anymore and will be replaced with LookForRangesWithHeight.
+// Deprecated: This function is not used anymore and will be replaced with LookForRangesWithHeight
 func LookForRanges(conditions []syntax.Condition) (ranges QueryRanges, indexes []int) {
 	ranges = make(QueryRanges)
 	for i, c := range conditions {
