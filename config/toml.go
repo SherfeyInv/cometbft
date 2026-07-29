@@ -140,6 +140,11 @@ abci = "{{ .BaseConfig.ABCI }}"
 # so the app can decide if we should keep the connection or not
 filter_peers = {{ .BaseConfig.FilterPeers }}
 
+# Buffer capacity for the internal EventBus. A value of 0 means unbuffered
+# (publishers block until subscribers receive). Higher values reduce back-pressure
+# at the cost of memory.
+event_bus_buffer_capacity = {{ .BaseConfig.EventBusBufferCapacity }}
+
 
 #######################################################################
 ###                 Advanced Configuration Options                  ###
@@ -550,6 +555,10 @@ version = "{{ .BlockSync.Version }}"
 # Experimental Adaptive sync (bool):
 #
 # Run both BLOCKSYNC and CONSENSUS for improved liveness, connectivity, and performance.
+# NOTE: On validator nodes, running consensus concurrently with blocksync while catching up
+# risks equivocation — consensus can sign votes for heights where the ingestor has not yet
+# committed the already-decided block. The HRS file and KMS are not sufficient backstops
+# for this scenario. Only enable on validators if you understand and accept this risk.
 adaptive_sync = {{ .BlockSync.AdaptiveSync }}
 
 #######################################################
