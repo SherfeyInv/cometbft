@@ -126,3 +126,5 @@ pull_request_rules:
           - v0.38.x
         assignees:
           - "{{ author }}"
+merge_protections_settings:
+  reporting_method: check-runs
